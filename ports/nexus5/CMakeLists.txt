@@ -25,17 +25,58 @@ set(MBEDTLS_ROOT "$ENV{MBEDTLS_ROOT}" CACHE PATH "mbedTLS install prefix")
 if(NOT MBEDTLS_ROOT)
   set(MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../artifacts/deps/mbedtls-armhf")
 endif()
-find_path(MBEDTLS_INCLUDE_DIR mbedtls/pkcs5.h HINTS "${MBEDTLS_ROOT}/include")
-find_library(MBEDTLS_LIB mbedtls HINTS "${MBEDTLS_ROOT}/lib")
-find_library(MBEDCRYPTO_LIB mbedcrypto HINTS "${MBEDTLS_ROOT}/lib")
-find_library(MBEDX509_LIB mbedx509 HINTS "${MBEDTLS_ROOT}/lib")
-if(NOT MBEDTLS_INCLUDE_DIR OR NOT MBEDTLS_LIB OR NOT MBEDCRYPTO_LIB)
+# The toolchain restricts library search to the sysroot; the vendored
+# mbedTLS is outside it, so look explicitly first.
+if(EXISTS "${MBEDTLS_ROOT}/include/mbedtls/pkcs5.h")
+  set(MBEDTLS_INCLUDE_DIR "${MBEDTLS_ROOT}/include")
+endif()
+foreach(_mbed_lib mbedtls mbedcrypto mbedx509)
+  if(EXISTS "${MBEDTLS_ROOT}/lib/lib${_mbed_lib}.a")
+    set(_MBED_${_mbed_lib}_LIB "${MBEDTLS_ROOT}/lib/lib${_mbed_lib}.a")
+  endif()
+endforeach()
+if(NOT MBEDTLS_INCLUDE_DIR)
+  find_path(MBEDTLS_INCLUDE_DIR mbedtls/pkcs5.h HINTS "${MBEDTLS_ROOT}/include")
+endif()
+if(NOT _MBED_mbedtls_LIB)
+  find_library(_MBED_mbedtls_LIB mbedtls HINTS "${MBEDTLS_ROOT}/lib")
+endif()
+if(NOT _MBED_mbedcrypto_LIB)
+  find_library(_MBED_mbedcrypto_LIB mbedcrypto HINTS "${MBEDTLS_ROOT}/lib")
+endif()
+if(NOT _MBED_mbedx509_LIB)
+  find_library(_MBED_mbedx509_LIB mbedx509 HINTS "${MBEDTLS_ROOT}/lib")
+endif()
+if(NOT MBEDTLS_INCLUDE_DIR OR NOT _MBED_mbedtls_LIB OR NOT _MBED_mbedcrypto_LIB)
   message(FATAL_ERROR
     "ARM mbedTLS not found under ${MBEDTLS_ROOT}.  "
     "Run scripts/build-mbedtls.sh or set MBEDTLS_ROOT.")
 endif()
+set(MBEDTLS_LIB "${_MBED_mbedtls_LIB}")
+set(MBEDCRYPTO_LIB "${_MBED_mbedcrypto_LIB}")
+set(MBEDX509_LIB "${_MBED_mbedx509_LIB}")
 
-find_library(Z_LIB z REQUIRED)
+# Vendored static zlib (the ARM sysroot has none).
+set(ZLIB_ROOT "$ENV{ZLIB_ROOT}" CACHE PATH "zlib install prefix")
+if(NOT ZLIB_ROOT)
+  set(ZLIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../artifacts/deps/zlib-armhf")
+endif()
+if(EXISTS "${ZLIB_ROOT}/include/zlib.h")
+  set(ZLIB_INCLUDE_DIR "${ZLIB_ROOT}/include")
+endif()
+if(EXISTS "${ZLIB_ROOT}/lib/libz.a")
+  set(Z_LIB "${ZLIB_ROOT}/lib/libz.a")
+endif()
+if(NOT ZLIB_INCLUDE_DIR)
+  find_path(ZLIB_INCLUDE_DIR zlib.h HINTS "${ZLIB_ROOT}/include")
+endif()
+if(NOT Z_LIB)
+  find_library(Z_LIB z HINTS "${ZLIB_ROOT}/lib")
+endif()
+if(NOT ZLIB_INCLUDE_DIR OR NOT Z_LIB)
+  message(FATAL_ERROR
+    "static zlib not found under ${ZLIB_ROOT}.  Run scripts/build-zlib.sh.")
+endif()
 find_package(Threads REQUIRED)
 
 # Application: every main/**/*.c except host tests and the ESP-only
@@ -51,11 +92,12 @@ list(FILTER APP_SOURCES EXCLUDE REGEX "/main/core/fw_update\\.c$")
 # linked; the port layer replaces them.
 file(GLOB WALLY_SOURCES "${KERN_DIR}/components/libwally-core/kern_wally.c"
                         "${KERN_DIR}/components/libwally-core/upstream/src/amalgamation/combined.c")
-file(GLOB CUR_SOURCES "${KERN_DIR}/components/cUR/src/*.c")
+file(GLOB_RECURSE CUR_SOURCES "${KERN_DIR}/components/cUR/src/*.c")
 file(GLOB QUIRC_SOURCES "${KERN_DIR}/components/k_quirc/src/*.c")
 file(GLOB BBQR_SOURCES "${KERN_DIR}/components/bbqr/src/*.c")
 file(GLOB DEFLATE_SOURCES "${KERN_DIR}/components/deflate_codec/src/*.c")
 file(GLOB BIP138_SOURCES "${KERN_DIR}/components/bip138/src/*.c")
+set(BUS_SOURCES "${KERN_DIR}/components/bus_timeout/bus_timeout.c")
 set(SECURE_SOURCES
     "${KERN_DIR}/components/secure_memory/secure_memory.c"
     "${KERN_DIR}/components/secure_memory/secret_alloc.c")
@@ -95,6 +137,7 @@ add_executable(kern-nexus
     ${BBQR_SOURCES}
     ${DEFLATE_SOURCES}
     ${BIP138_SOURCES}
+    ${BUS_SOURCES}
     ${SECURE_SOURCES}
     ${PORT_SOURCES}
     ${CAMERA_SOURCES}
@@ -114,16 +157,25 @@ target_include_directories(kern-nexus PRIVATE
     "${KERN_DIR}/main"
     "${KERN_DIR}/components"
     "${KERN_DIR}/components/libwally-core"
+    "${KERN_DIR}/components/libwally-core/upstream"
     "${KERN_DIR}/components/libwally-core/upstream/include"
+    "${KERN_DIR}/components/libwally-core/upstream/src"
+    "${KERN_DIR}/components/libwally-core/upstream/src/ccan"
+    "${KERN_DIR}/components/libwally-core/upstream/src/secp256k1"
+    "${KERN_DIR}/components/libwally-core/upstream/src/secp256k1/include"
+    "${KERN_DIR}/components/libwally-core/upstream/src/secp256k1/src"
     "${KERN_DIR}/components/cUR/src"
     "${KERN_DIR}/components/k_quirc/include"
     "${KERN_DIR}/components/k_quirc/src"
     "${KERN_DIR}/components/bbqr/src"
     "${KERN_DIR}/components/bip138/include"
+    "${KERN_DIR}/components/secure_memory/include"
+    "${KERN_DIR}/components/bus_timeout/include"
     "${KERN_DIR}/components/deflate_codec/src"
     "${KERN_DIR}/components/video"
     "${KERN_DIR}/components/bsp_common/include"
     "${MBEDTLS_INCLUDE_DIR}"
+    "${ZLIB_INCLUDE_DIR}"
     "${LVGL_DIR}"
     "${LVGL_DIR}/src"
 )
@@ -147,6 +199,7 @@ target_compile_options(kern-nexus PRIVATE
     -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
     -Wno-sign-compare -Wno-missing-field-initializers
     -fstack-protector-strong -D_FORTIFY_SOURCE=2
+    -flax-vector-conversions
 )
 
 target_link_libraries(kern-nexus PRIVATE
@@ -159,5 +212,5 @@ target_link_libraries(kern-nexus PRIVATE
 
 set_target_properties(kern-nexus PROPERTIES
     OUTPUT_NAME kern-nexus
-    LINK_FLAGS "-static -Wl,--gc-sections"
+    LINK_FLAGS "-static -Wl,--gc-sections -Wl,--wrap=free -Wl,--wrap=realloc"
 )

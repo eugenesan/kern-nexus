@@ -39,8 +39,9 @@ The build dependencies and exact commands are in
 [docs/build-and-deploy.md](docs/build-and-deploy.md).
 
 ```sh
-# one-time dependency build: mbedTLS is vendored under kern/third_party
+# one-time dependency builds: mbedTLS and zlib are vendored under kern/third_party
 bash scripts/build-mbedtls.sh
+bash scripts/build-zlib.sh
 
 # kernel (patches + defconfig + air-gap profile)
 bash scripts/build-kernel.sh

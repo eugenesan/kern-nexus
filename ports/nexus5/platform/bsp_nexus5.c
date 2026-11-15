@@ -161,8 +161,8 @@ lv_display_t *bsp_display_start(void) {
   if (s_display)
     lv_linux_fbdev_set_file(s_display, FB_NODE);
 #if LV_USE_EVDEV
-  (void)lv_linux_evdev_create(LV_INDEV_TYPE_POINTER, TOUCH_NODE);
-  (void)lv_linux_evdev_create(LV_INDEV_TYPE_KEYPAD, KEY_NODE);
+  (void)lv_evdev_create(LV_INDEV_TYPE_POINTER, TOUCH_NODE);
+  (void)lv_evdev_create(LV_INDEV_TYPE_KEYPAD, KEY_NODE);
 #endif
   return s_display;
 }

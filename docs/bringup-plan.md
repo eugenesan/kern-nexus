@@ -1,10 +1,10 @@
 # Bring-up plan and acceptance tests
 
 **Bootstrap status (2026-11-14):** the standalone unified-sighash reference
-passes all **166** embit vectors (`make -C tools/sighash`), and the
-boot-chain bootstrap images (`scripts/build-bootstrap.sh`) build from the
-preserved Krux kernel.  Device verification of the bootstrap image is
-pending a fastboot window.
+passes all **166** embit vectors (`make -C tools/sighash`); the boot-chain
+bootstrap image runs on the device; and the real static ARM kern binary now
+builds and starts on the Nexus 5, drawing its disclaimer screen on fb0.
+Touch, camera, NFC and the full wallet flow are still pending.
 
 The order matters: each phase has an observable exit criterion.  Do not
 start the unified sighash on hardware before the C vectors pass; do not

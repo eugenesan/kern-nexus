@@ -14,7 +14,7 @@ port at `~/Develop/src/krux-nexus`.
 | `make`, `bc`, `flex`, `bison`, `python3`, `cpio`, `gzip`, `xz`, `git` | kernel and image builds |
 | `adb`, `fastboot` | deploy/diagnose |
 | `dtc` | optional DTB inspection |
-| `libz` (ARM static) | libwally/BBQr/deflate |
+| `libz` (ARM static) | libwally/BBQr/deflate; vendored at `kern/third_party/zlib`, built by `scripts/build-zlib.sh` |
 | **mbedTLS 3.x** (ARM static) | kern `crypto_utils`, PIN, KEF, SeedKeeper SC |
 | **LVGL 9.5** | vendored tree, no `FetchContent` on an offline build |
 | `libwally-core` | `kern/components/libwally-core/upstream` submodule |
@@ -46,7 +46,8 @@ AES, HMAC, PBKDF2 and PSA.  On ESP-IDF those libraries are supplied by the
 IDF build; on Linux there is no IDF, so a static ARM mbedTLS is a real
 dependency, not an optional one.  `scripts/build-mbedtls.sh` builds a
 pinned source tree at `kern/third_party/mbedtls` (submodule, v3.6.7) into
-`artifacts/deps/mbedtls-armhf` (static).  `MBEDTLS_SRC` can override the
+`artifacts/deps/mbedtls-armhf` (static).  `scripts/build-zlib.sh` does the
+same for `kern/third_party/zlib` (v1.3.1) into `artifacts/deps/zlib-armhf`.  `MBEDTLS_SRC` can override the
 source path; the script does not download.  Required modules: `mbedtls`, `mbedcrypto`, `mbedx509`, PSA
 crypto headers.
 
