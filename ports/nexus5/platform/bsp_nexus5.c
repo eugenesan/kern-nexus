@@ -53,6 +53,7 @@ struct mdp_display_commit {
 static pthread_mutex_t s_lvgl_mutex;
 static pthread_once_t s_lvgl_once = PTHREAD_ONCE_INIT;
 static lv_display_t *s_display;
+static lv_timer_t *s_commit_timer;
 static int s_fb_fd = -1;
 static void *s_fb_map;
 static size_t s_fb_size;
@@ -101,6 +102,17 @@ static int open_fb(void) {
       s_fb_map = NULL;
   }
   return 0;
+}
+
+static void panel_commit(void);
+
+/* LVGL renders inside lv_timer_handler(), which does not call the BSP's
+ * lock/unlock pair.  The panel commit is what copies the framebuffer to the
+ * scanout plane, so without a periodic commit the framebuffer changes while
+ * the panel keeps showing an old (or empty) page. */
+static void commit_timer_cb(lv_timer_t *timer) {
+  (void)timer;
+  panel_commit();
 }
 
 static void panel_commit(void) {
@@ -171,8 +183,10 @@ lv_display_t *bsp_display_start(void) {
   pthread_once(&s_lvgl_once, init_mutex);
   open_fb();
   s_display = lv_linux_fbdev_create();
-  if (s_display)
+  if (s_display) {
     lv_linux_fbdev_set_file(s_display, FB_NODE);
+    s_commit_timer = lv_timer_create(commit_timer_cb, 16, NULL);
+  }
 #if LV_USE_EVDEV
   (void)lv_evdev_create(LV_INDEV_TYPE_POINTER, TOUCH_NODE);
   (void)lv_evdev_create(LV_INDEV_TYPE_KEYPAD, KEY_NODE);
