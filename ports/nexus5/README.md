@@ -29,7 +29,7 @@ bash scripts/build-kern.sh
 
 Needs:
 
-* `kern/managed_components/lvgl__lvgl` (LVGL 9.5) or `-DLVGL_DIR=`;
+* `kern/third_party/lvgl` (LVGL 9.5) or `-DLVGL_DIR=`;
 * ARM static mbedTLS at `artifacts/deps/mbedtls-armhf` or `MBEDTLS_ROOT=`;
 * ARM static zlib;
 * `kern/components/libwally-core/upstream` submodule.
