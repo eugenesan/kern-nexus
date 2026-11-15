@@ -1,0 +1,13 @@
+on boot
+
+# The kern init stub.  TWRP's own recovery service is stopped; this
+# service becomes either TWRP (exec /sbin/recovery.stock) or kern.
+service kern /sbin/kern-init
+    seclabel u:r:recovery:s0
+
+# start-kern runs this in its own cgroup, so stopping TWRP does not kill
+# the request.  It is disabled; only ctl.start starts it.
+service kern-firmware /sbin/kern-init start
+    seclabel u:r:recovery:s0
+    oneshot
+    disabled

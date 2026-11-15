@@ -1,0 +1,59 @@
+#!/bin/bash
+# make-boot-image.sh -- pack the stub boot image: the kernel plus the
+# stub ramdisk, in the format the stock bootloader expects.
+#
+# This is the image the runtime design boots: the device starts TWRP
+# (so the mounts, the USB gadget and adb come up as they always did),
+# but the `recovery` service is our init stub, which hands the display
+# and the touch screen to the firmware.
+#
+# The header (the load addresses, the page size, the command line) is
+# NOT invented here: it is taken from an existing, working boot image
+# with bootimg.py unpack.  The stock bootloader loads the kernel and
+# the ramdisk at exactly the addresses in the header, so getting them
+# wrong produces a device that boots to nothing at all, with no error
+# message.  That is why the template is a real image and not a set of
+# constants.
+#
+# Usage:
+#   ./make-boot-image.sh [TEMPLATE.img] [KERNEL] [OUT.img]
+#
+# RAMDISK=path selects a different ramdisk, for example the one built
+# with build-stub-ramdisk.sh --bundle (artifacts/built/ramdisk-bundled).
+set -e
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+TEMPLATE=${1:-$ROOT/artifacts/twrp-3.7.0_9-HH.R.17-MADV_WIPEONFORK.img}
+# The kernel the shipped boot-stub.img pairs with.  It is NOT the same
+# one the current kernel build produces: this is the kernel that was
+# flashed and verified with the stub, so it is kept next to the image
+# rather than rebuilt.
+KERNEL=${2:-$ROOT/artifacts/built/ko/arch/arm/boot/zImage-dtb}
+OUT=${3:-$ROOT/artifacts/built/boot-kern.img}
+RAMDISK=${RAMDISK:-$ROOT/artifacts/built/ramdisk-kern}
+EXTRA_CMDLINE=${EXTRA_CMDLINE:-}
+WORK=${WORK:-/tmp/opencode/kern-boot}
+
+[ -f "$TEMPLATE" ] || { echo "no template boot image at $TEMPLATE" >&2; exit 1; }
+[ -f "$KERNEL" ]    || { echo "no kernel at $KERNEL" >&2; exit 1; }
+[ -f "$RAMDISK" ]   || { echo "no stub ramdisk at $RAMDISK (run build-stub-ramdisk.sh)" >&2; exit 1; }
+
+rm -rf "$WORK"; mkdir -p "$WORK"
+python3 "$HERE/bootimg.py" unpack "$TEMPLATE" "$WORK" >/dev/null
+cp "$KERNEL" "$WORK/kernel"
+if [ -n "$EXTRA_CMDLINE" ]; then
+	python3 "$HERE/bootimg.py" pack "$WORK" "$RAMDISK" "$OUT" \
+		--extra-cmdline "$EXTRA_CMDLINE" >/dev/null
+else
+	python3 "$HERE/bootimg.py" pack "$WORK" "$RAMDISK" "$OUT" >/dev/null
+fi
+size=$(stat -c %s "$OUT")
+echo "  -> $OUT ($size bytes)"
+# hammerhead's boot partition is 0x1600000 bytes.  A bundled ramdisk is
+# close to that limit; fail here rather than producing an image that
+# cannot be flashed.
+MAX_SIZE=${MAX_SIZE:-23068672}
+if [ "$size" -gt "$MAX_SIZE" ]; then
+	echo "  !! boot image is larger than the boot partition ($MAX_SIZE bytes)" >&2
+	exit 1
+fi

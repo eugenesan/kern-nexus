@@ -1,0 +1,17 @@
+#!/sbin/sh
+# start-adb -- bring up adbd and the USB adb gadget on demand.
+#
+# The sealed image hides /sbin/adbd at boot (the stub renames it to
+# adbd.off) so TWRP's init cannot start it.  Run this from TWRP's
+# terminal, or 'sh /sbin/start-adb' from the recovery shell, when adb
+# is needed -- for example to sideload an Android update.
+if [ -e /sbin/adbd.off ]; then
+    mv /sbin/adbd.off /sbin/adbd
+    chmod 750 /sbin/adbd
+fi
+setprop sys.usb.config none
+sleep 1
+setprop sys.usb.config adb
+setprop sys.usb.state adb
+setprop ctl.start adbd
+echo "adb: $(getprop sys.usb.state)"
