@@ -26,6 +26,25 @@
 #include <string.h>
 #include <time.h>
 
+/*
+ * Bring-up trace.  Compile with -DKERN_NFC_TRACE for a standalone probe; the
+ * signer build leaves it out.  The BCM2079x can wedge a command, so knowing
+ * which step was last reached is the difference between a useful and a
+ * silent failure.
+ */
+#ifdef KERN_NFC_TRACE
+#include <stdio.h>
+#define NFC_TRACE(...)                                                        \
+  do {                                                                        \
+    fprintf(stderr, __VA_ARGS__);                                             \
+    fflush(stderr);                                                           \
+  } while (0)
+#else
+#define NFC_TRACE(...)                                                        \
+  do {                                                                        \
+  } while (0)
+#endif
+
 /* --- framing (nfc.py lines 40-86) -------------------------------------- */
 
 #define HCIT_NFC 0x10
@@ -414,14 +433,20 @@ static int nci_send(kern_nfc_t *nfc, nci_state_t *st, uint8_t gid, uint8_t oid,
   size_t len = kern_nfc_nci_build_packet(MT_CMD | gid, oid, payload,
                                          payload_len, pkt, sizeof(pkt));
   int written;
+  int r;
 
   if (len == 0)
     return -1;
+  NFC_TRACE("nfc: -> gid=%x oid=%x len=%u\n", gid, oid, (unsigned)len);
   written = kern_nfc_write(nfc, pkt, len);
-  if (written != (int)len)
+  if (written != (int)len) {
+    NFC_TRACE("nfc: write failed (%d)\n", written);
     return -1;
-  return nci_wait_for(nfc, st, MT_RSP | gid, oid, COMMAND_TIMEOUT_MS, rsp, cap,
-                      rsp_len);
+  }
+  r = nci_wait_for(nfc, st, MT_RSP | gid, oid, COMMAND_TIMEOUT_MS, rsp, cap,
+                   rsp_len);
+  NFC_TRACE("nfc: <- gid=%x oid=%x rc=%d\n", gid, oid, r);
+  return r;
 }
 
 /* Send a command whose status byte must be NCI_STATUS_OK (0x00). */
@@ -460,6 +485,7 @@ static int nci_chip_setup(kern_nfc_t *nfc, nci_state_t *st) {
   int r;
 
   /* WAKE 0 -> POWER 0 -> POWER 1 -> WAKE 0, then assert wake. */
+  NFC_TRACE("nfc: power cycle\n");
   if (kern_nfc_wake(nfc, 0) != 0)
     return -1;
   if (kern_nfc_power(nfc, 0) != 0)
