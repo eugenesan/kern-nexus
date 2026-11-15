@@ -165,81 +165,59 @@ The signed signatures are read back from the PSBT and compared before and
 after signing; a pre-populated/planted signature slot is rejected.  Keep
 that behaviour.
 
-### 1.4 Porting to libwally-core
+### 1.4 Where the implementation lives
 
-Add to the libwally fork (not to kern):
+The digest is implemented in kern, not in libwally:
 
-```c
-int wally_tx_get_unified_signature_hash(
-    const struct wally_tx *tx,
-    size_t input_index,
-    uint32_t script_type,             /* 0..3 */
-    const uint64_t *values,           /* one per input */
-    size_t values_len,
-    const struct wally_tx_output **script_pubkeys, /* or script bytes */
-    size_t script_pubkeys_len,
-    const unsigned char *script_code, size_t script_code_len,
-    const unsigned char *tapleaf_hash, size_t tapleaf_hash_len,
-    const unsigned char *annex, size_t annex_len,
-    uint32_t codeseparator_pos,
-    uint32_t sighash_type,
-    unsigned char *bytes_out);
-```
+* `kern/main/core/unified_sighash.c` — transaction parser and digest;
+* `kern/main/core/unified_sha256.c` — SHA256/tagged-SHA256;
+* `kern/main/core/psbt.c` — per-input signing glue.
 
-and a PSBT wrapper that:
+libwally stays unmodified.  Its `wally_psbt_sign_bip32()` dispatch, key
+matching and taproot branches assume BIP143/BIP341; adding a fourth type
+there would mean maintaining a fork of a pinned submodule.  libwally is
+still used for EC signing, DER encoding, BIP341 tweaks and the PSBT maps.
+The digest is computed once per input from the transaction and all spent
+outputs, then:
 
-* selects the unified path iff the input's `sighash_type` has `0x20`;
-* derives the script type from the **script** (scriptPubKey, redeemScript,
-  witnessScript, tapleaf), never from which PSBT fields are populated;
-* validates per input, fails one input at a time with a status code;
-* keeps the caller's values out of any shared sibling cache and keeps
-  memory overhead constant;
-* exposes the opt-in flag to kern's signer.
+* ECDSA (legacy, P2WPKH, P2WSH, P2SH): sign, DER-encode, append `0x21`,
+  add a partial signature keyed by the compressed pubkey;
+* taproot key path: tweak the private key with the PSBT's merkle root,
+  Schnorr-sign, append `0x21`;
+* taproot script path: sign each leaf whose hash is listed for our xonly
+  key, keyed by `xonly || leaf_hash`.
 
-Implementation can use `wally_sha256`, `wally_sha256d` and the existing
-tagged-hash helper; there is no new cryptographic primitive.
+`psbt_sighash_is_supported()` accepts `0x21` (`UNIFIED|ALL`); the review
+screen names it `UNIFIED|ALL`.  Mixed or partial requests are still
+refused, and every input must carry an amount because the digest commits
+to all of them.
 
 ### 1.5 Tests
 
-Before any hardware:
-
-1. Generate/port a C vector runner using
-   `unified_sighash.json` (every vector: script type, amounts,
-   scriptPubKeys, annex, codeseparator, hash type, expected digest).
-2. Port the negotiation tests: mixed types, partial signing, downgrade,
-   `SIGHASH_SINGLE` without an output, invalid bits, out-of-range type.
-3. Compare against `embit` byte-for-byte for all vectors.
-4. Add a libwally PSBT test that signs a PSBT with `0x21` and verifies the
-   signature under the unified digest.
-5. Run the existing libwally PSBT tests to prove standard paths unchanged.
+* `make -C tools/sighash` compiles the firmware files and passes all 166
+  vectors.
+* `kern/main/core/test/test_psbt_classify.c` signs a P2WPKH and a BIP86
+  PSBT with `0x21` and verifies each signature under the expected unified
+  digest; the suite is at **146 passed**.
 
 ### 1.6 XBT / BLAKE2b block rules
 
-XBT is a separate chain/block format, not a replacement for Bitcoin.  The
-fork changes the **block header / proof of work** to BLAKE2b and activates
-the unified sighash at the same buried deployment (`Blake2bHeight`).  The
-signature hash remains the tagged-SHA256 message above; the signature
-verification path is the same ECDSA/Schnorr path for the script type.
+XBT changes the **block header / proof of work** to BLAKE2b.  It does not
+change the transaction or PSBT format, and it does not change the unified
+signature hash, which remains tagged SHA256.
 
-Implement the chain selection as a build/runtime rule, not a UI toggle:
+A signer does not validate blocks.  Kern's signing path therefore only
+needs to recognise the opt-in sighash byte; chain selection, block headers
+and PoW are coordinator/node concerns.  `components/xbt` contains a
+standalone BLAKE2b/v2-header implementation with the five official Knots
+vectors, but nothing links it into kern and it is not a prerequisite for
+signing.
 
-```c
-typedef enum { KERN_CHAIN_BITCOIN, KERN_CHAIN_XBT } kern_chain_id;
-```
-
-The XBT side has a first implementation in `components/xbt` (`blake2b`, v2 header, PoW); it still needs:
-
-* BLAKE2b block-header hashing and the v2 block header (height + tx count)
-  that the deployment requires;
-* the activation height / deployment name (`blake2b`);
-* XBT network/address parameters and how a PSBT is marked for XBT;
-* the Knots functional tests (`knots_interop.py`, `cve_2020_14199.py`,
-  `seedsigner_knots_e2e.py`) and the 166 vectors.
-
-The current C vector test in `tools/sighash/` covers the SHA256/Knots
-signature-hash side and passes all 166 vectors (`make -C tools/sighash`).
-Add an XBT block-header test separately; do not change the signature-hash
-vectors to fit it.
+The missing XBT facts are the activation height and the network/address
+parameters.  Until those are supplied, do not add a chain selector or
+invent constants.  A PSBT that carries `0x21` is signed under the unified
+digest and labelled `UNIFIED|ALL`; a PSBT that asks for any other
+non-`ALL` type is refused, exactly as Krux does in `sighash.py`.
 
 ## 2. SeedKeeper / Satochip / TapSigner
 

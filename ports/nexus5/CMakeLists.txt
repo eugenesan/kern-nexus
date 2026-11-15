@@ -164,6 +164,8 @@ target_include_directories(kern-nexus PRIVATE
     "${KERN_DIR}/components"
     "${KERN_DIR}/components/libwally-core"
     "${KERN_DIR}/components/libwally-core/upstream"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../components/seedkeeper"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../components/nfc"
     "${KERN_DIR}/components/libwally-core/upstream/include"
     "${KERN_DIR}/components/libwally-core/upstream/src"
     "${KERN_DIR}/components/libwally-core/upstream/src/ccan"
