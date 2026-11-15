@@ -68,8 +68,8 @@ ports/       nexus5 CMake project and Linux/ARM platform layer
 components/  ported camera, NFC, SeedKeeper components
 rootfs/      init stub, ramdisk builder, boot-image packer
 scripts/     kernel/kern/image/deploy wrappers
-tools/       kernel profiles, host serial helper, air-gap gate
-linux/       kernel patch series and profiles
+tools/       kernel patches/profiles, host serial helper, air-gap gate
+linux/       kernel tree (submodule, airgap/cam-xz-wipe)
 artifacts/   TWRP template and generated images (gitignored)
 docs/        the guide and detail documents
 ```

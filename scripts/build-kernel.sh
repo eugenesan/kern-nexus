@@ -22,11 +22,11 @@ if [ ! -f "$TREE/Makefile" ]; then
     mkdir -p "$(dirname "$TREE")"
     git clone -b lineage-23.2 --depth 1 \
         https://github.com/eugenesan/android_kernel_lge_hammerhead "$TREE"
-    git -C "$TREE" apply "$ROOT/linux/patches/kern-nexus-kernel.patch"
+    git -C "$TREE" apply "$ROOT/tools/kernel/patches/kern-nexus-kernel.patch"
 fi
 
 # The modified defconfig is kept outside the tree (KernelSU removed).
-cp "$ROOT/linux/config/lineageos_hammerhead_defconfig" \
+cp "$ROOT/tools/kernel/config/lineageos_hammerhead_defconfig" \
    "$TREE/arch/arm/configs/$DEFCONFIG_NAME"
 
 mkdir -p "$OUT"

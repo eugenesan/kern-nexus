@@ -46,7 +46,8 @@ kern-nexus/
   rootfs/               init stub, ramdisk builder, boot-image packer
   scripts/              build, image and deploy wrappers
   tools/                kernel profiles/build helper, host serial helper
-  linux/                kernel patch series, profiles, build notes
+  linux/                kernel tree (submodule, airgap/cam-xz-wipe)
+  tools/kernel/         kernel patches, defconfig, profiles, builder
   artifacts/            TWRP template and generated images (gitignored)
   docs/                 this guide and the detail documents
 ```
@@ -237,7 +238,7 @@ byte-identical before touching hardware.
 ## 9. Kernel and memory wipe
 
 The kernel is the same hammerhead 3.4 CAF fork used by `krux-nexus`, branch
-`airgap/cam-xz-wipe`.  The patch series in `linux/patches/` carries the
+`airgap/cam-xz-wipe`.  The patch series in `tools/kernel/patches/` carries the
 camera/CPP fixes, XZ kernel/ramdisk support, USB gadget/adb fixes and the
 kernel-only power-off wipe.  Build it with `lineageos_hammerhead_defconfig`
 and the air-gap profile; use `zImage-dtb`.

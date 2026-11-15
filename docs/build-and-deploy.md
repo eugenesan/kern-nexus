@@ -72,7 +72,7 @@ CMakeLists.txt` requires that path and fails rather than fetching.
 ## 2. Kernel
 
 The kernel is the hammerhead 3.4 CAF tree with the changes in
-`linux/patches/kern-nexus-kernel.patch` (camera/CPP, XZ, USB gadget, wipe).
+`tools/kernel/patches/kern-nexus-kernel.patch` (camera/CPP, XZ, USB gadget, wipe).
 The patch is against `lineage-23.2`.
 
 ```sh

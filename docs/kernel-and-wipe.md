@@ -8,8 +8,8 @@
 * working branch: `airgap/cam-xz-wipe`
 * head in the reference tree: `cc17c59739b`
 * base for the patch series: `lineage-23.2`
-* source: `linux/patches/kern-nexus-kernel.patch`, profiles in
-  `tools/kernel/profiles/`
+* source: `linux/` submodule, `tools/kernel/patches/kern-nexus-kernel.patch`,
+  profiles in `tools/kernel/profiles/`
 
 The patch series includes:
 
@@ -138,7 +138,7 @@ bash scripts/build-kernel.sh
 ```
 
 The script uses `linux/` when present; otherwise it clones the fork branch
-or applies `linux/patches/kern-nexus-kernel.patch` to a `lineage-23.2`
+or applies `tools/kernel/patches/kern-nexus-kernel.patch` to a `lineage-23.2`
 tree.  `KERNEL_OUT` selects another output directory.  The output must be
 on disk, not `/tmp` (tmpfs).
 

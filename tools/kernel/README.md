@@ -1,9 +1,9 @@
-# linux/
+# tools/kernel/
 
-The kernel is the hammerhead 3.4 CAF tree from
-`eugenesan/android_kernel_lge_hammerhead`, branch `airgap/cam-xz-wipe`.
-`kern-nexus` keeps only the changes as a patch so the new project does not
-carry a 1.5 GB tree.
+The kernel itself is the `linux/` submodule: the hammerhead 3.4 CAF tree
+from `eugenesan/android_kernel_lge_hammerhead`, branch
+`airgap/cam-xz-wipe`.  This directory keeps the patch series, the
+modified defconfig and the build/keeper tooling.
 
 ## Layout
 
@@ -20,12 +20,13 @@ deliberately excluded: this project runs kern as root from the initramfs.
 ## Using it
 
 ```sh
-git clone -b lineage-23.2 --depth 1 \
-    https://github.com/eugenesan/android_kernel_lge_hammerhead linux
-git -C linux apply ../patches/kern-nexus-kernel.patch
-cp config/lineageos_hammerhead_defconfig \
+git submodule update --init linux
+cp tools/kernel/config/lineageos_hammerhead_defconfig \
    linux/arch/arm/configs/kern_nexus_hammerhead_defconfig
 ```
+
+The submodule is already on `airgap/cam-xz-wipe`; the patch is kept as a
+record and for rebuilding from a clean `lineage-23.2` tree.
 
 `scripts/build-kernel.sh` does this automatically when `linux/` is not a
 kernel tree, or uses an existing tree.  It builds with the host
@@ -47,7 +48,7 @@ git -C linux diff --binary lineage-23.2..airgap/cam-xz-wipe -- \
       ':(exclude)drivers/Makefile' \
       ':(exclude)arch/arm/configs/lineageos_hammerhead_defconfig' \
       ':(exclude)arch/arm/configs/wiper_hammerhead_defconfig' \
-    > ../kern-nexus/linux/patches/kern-nexus-kernel.patch
+    > ../kern-nexus/tools/kernel/patches/kern-nexus-kernel.patch
 ```
 
 The defconfig is copied separately and the KernelSU block removed; the

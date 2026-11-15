@@ -111,7 +111,7 @@ Front sensor: **MT9M114B** (720p), not needed for kern.  The actuator is a
 **DW9714** VCM (`/dev/v4l-subdev*`, I2C).
 
 The vendor camera HAL is not used.  Camd talks V4L2/Media Controller and
-the MSM private ioctls directly; the kernel changes in `linux/patches`
+the MSM private ioctls directly; the kernel changes in `tools/kernel/patches`
 make the ISP/CPP path work.
 
 ### 5.2 Path and format
