@@ -252,7 +252,19 @@ static int sk_sc_init(kern_seedkeeper_t *sk) {
       WALLY_OK)
     return -1;
 
-  if (seedkeeper_exchange(sk, apdu, sizeof(apdu), resp, &resp_len, &sw) != 0) {
+  /* The first APDU after an RF re-activation is sometimes lost.  Retry the
+   * 0x81 command; a GET_STATUS between attempts also keeps the link alive. */
+  int init_rc = -1;
+  for (int attempt = 0; attempt < 3; attempt++) {
+    resp_len = sizeof(resp);
+    init_rc = seedkeeper_exchange(sk, apdu, sizeof(apdu), resp, &resp_len, &sw);
+    sk_trace("init try", init_rc);
+    if (init_rc == 0)
+      break;
+    (void)sk_keepalive(sk);
+    usleep(50000);
+  }
+  if (init_rc != 0) {
     sk_trace("init io", 0);
     return -1;
   }
