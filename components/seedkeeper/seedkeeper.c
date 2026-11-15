@@ -257,11 +257,13 @@ static int sk_sc_init(kern_seedkeeper_t *sk) {
   int init_rc = -1;
   for (int attempt = 0; attempt < 3; attempt++) {
     if (attempt) {
-      /* A lost 0x81 may still have initialized the applet.  Re-selecting
-       * resets its secure-channel state; otherwise the next 0x81 is
-       * answered with 6E00 (class not supported). */
+      /* A lost 0x81 may still have initialized the applet, and selecting
+       * the AID alone does not clear that card-side state.  Power-cycle the
+       * RF link and re-activate the card before trying 0x81 again; otherwise
+       * the applet answers 6E00 (class not supported). */
+      (void)kern_nfc_bring_up((kern_nfc_t *)sk->ctx);
       (void)seedkeeper_select(sk);
-      usleep(100000);
+      usleep(150000);
     }
     resp_len = sizeof(resp);
     init_rc = seedkeeper_exchange(sk, apdu, sizeof(apdu), resp, &resp_len, &sw);
