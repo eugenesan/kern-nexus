@@ -45,9 +45,9 @@ kern uses mbedTLS directly on the ESP32-P4: `main/core/crypto_utils.c`,
 AES, HMAC, PBKDF2 and PSA.  On ESP-IDF those libraries are supplied by the
 IDF build; on Linux there is no IDF, so a static ARM mbedTLS is a real
 dependency, not an optional one.  `scripts/build-mbedtls.sh` builds a
-pinned source tree into `artifacts/deps/mbedtls-armhf` (static).  Set
-`MBEDTLS_SRC` to an existing source tree; the script does not download by
-default.  Required modules: `mbedtls`, `mbedcrypto`, `mbedx509`, PSA
+pinned source tree at `kern/third_party/mbedtls` (submodule, v3.6.7) into
+`artifacts/deps/mbedtls-armhf` (static).  `MBEDTLS_SRC` can override the
+source path; the script does not download.  Required modules: `mbedtls`, `mbedcrypto`, `mbedx509`, PSA
 crypto headers.
 
 If the goal is to avoid mbedTLS entirely, the alternative is to port
@@ -61,10 +61,9 @@ path is a pinned mbedTLS.
 `main/idf_component.yml` (`lvgl/lvgl 9.5.*`) into `managed_components/` at
 IDF configure time.  That directory is generated, not part of the repo.
 The simulator CMake uses `managed_components/lvgl__lvgl` if it exists and
-otherwise **fetches LVGL from the network**.  Neither is acceptable for an
-offline static target.  `scripts/fetch-lvgl.sh` clones tag `v9.5.0` into
-`kern/managed_components/lvgl__lvgl`; `ports/nexus5/CMakeLists.txt` requires that path
-and fails with an explicit message rather than fetching.
+otherwise fetches LVGL from the network.  For the target, LVGL is now a
+pinned submodule at `kern/third_party/lvgl` (tag `v9.5.0`); `ports/nexus5/
+CMakeLists.txt` requires that path and fails rather than fetching.
 
 `ports/nexus5/lv_conf.h` enables `LV_USE_LINUX_FBDEV` and
 `LV_USE_EVDEV`, 32-bit color and the fonts kern uses.

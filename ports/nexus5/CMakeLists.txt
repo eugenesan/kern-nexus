@@ -13,10 +13,10 @@ if(NOT EXISTS "${KERN_DIR}/main/main.c")
 endif()
 
 # Offline vendored LVGL 9.5 (no FetchContent).
-set(LVGL_DIR "${KERN_DIR}/managed_components/lvgl__lvgl" CACHE PATH "LVGL 9.5 source")
+set(LVGL_DIR "${KERN_DIR}/third_party/lvgl" CACHE PATH "LVGL 9.5 source")
 if(NOT EXISTS "${LVGL_DIR}/src/lvgl.h")
   message(FATAL_ERROR
-    "LVGL 9.5 not found at ${LVGL_DIR}.  Run scripts/fetch-lvgl.sh "
+    "LVGL 9.5 not found at ${LVGL_DIR}.  Check out the kern submodules "
     "or pass -DLVGL_DIR=/path/to/lvgl.")
 endif()
 

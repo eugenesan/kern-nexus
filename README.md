@@ -39,9 +39,8 @@ The build dependencies and exact commands are in
 [docs/build-and-deploy.md](docs/build-and-deploy.md).
 
 ```sh
-# one-time dependencies (LVGL is not checked in; mbedTLS must be ARM-static)
-bash scripts/fetch-lvgl.sh
-MBEDTLS_SRC=/path/to/mbedtls-3.x bash scripts/build-mbedtls.sh
+# one-time dependency build: mbedTLS is vendored under kern/third_party
+bash scripts/build-mbedtls.sh
 
 # kernel (patches + defconfig + air-gap profile)
 bash scripts/build-kernel.sh

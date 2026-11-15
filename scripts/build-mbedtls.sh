@@ -6,7 +6,7 @@
 # Output: artifacts/deps/mbedtls-armhf/{include,lib}
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC="${MBEDTLS_SRC:-$ROOT/third_party/mbedtls}"
+SRC="${MBEDTLS_SRC:-$ROOT/kern/third_party/mbedtls}"
 BUILD="${MBEDTLS_BUILD:-$ROOT/build/mbedtls-armhf}"
 PREFIX="${MBEDTLS_ROOT:-$ROOT/artifacts/deps/mbedtls-armhf}"
 
