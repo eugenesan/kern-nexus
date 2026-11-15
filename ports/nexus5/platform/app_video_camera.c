@@ -35,7 +35,7 @@ static volatile int s_stop;
 static volatile int s_running;
 static int s_sock = -1;
 static app_video_frame_operation_cb_t s_cb;
-static uint32_t s_w = 720, s_h = 960;
+static uint32_t s_w = 960, s_h = 1280;
 static int s_started;
 
 static void klog(const char *fmt, ...) {
