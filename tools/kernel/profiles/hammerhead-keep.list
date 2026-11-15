@@ -1,0 +1,74 @@
+# Symbols the air-gap kernel must have ON.
+#
+# This is the counterpart to hammerhead.list (which removes the radio) and
+# hammerhead-camera.list (which configures the camera). It states what the
+# stripped kernel must STILL have.
+#
+# SYNTAX
+# ------
+#   CONFIG_FOO=y   force on
+#   CONFIG_FOO=n   force off
+#   CONFIG_FOO     force on (a bare name means "=y")
+
+# ---- the USB gadget, for adb -------------------------------------------
+# CONFIG_USB_G_ANDROID
+#       The AOSP "android" USB gadget. It is the function that provides adb
+#       (and, if you ask for it, RNDIS) to a userspace adbd.
+#
+#       This is the *legacy adb* path, and it is what the two kernels that
+#       are known to give a working adbd use:
+#
+#         TWRP kernel (bbba49d1)     CONFIG_USB_G_ANDROID=y
+#         installed kernel (e4e483b4) CONFIG_USB_G_ANDROID=y
+#         ROM zip kernel              CONFIG_USB_G_ANDROID=y
+#
+#       Note that CONFIG_USB_FUNCTIONFS is a DIFFERENT thing and is NOT what
+#       adb needs. CONFIG_USB_FUNCTIONFS is the functionfs *filesystem* --
+#       /dev/ffs.ep0 -- used by the generic "g_ffs" gadget function. The
+#       android gadget implements its adb function ON TOP of f_fs internally
+#       (drivers/usb/gadget/android.c refers to ffs 66 times) and creates
+#       /dev/usb-ffs/adb/ep0 itself, which is the path TWRP's adbd opens:
+#
+#         strings sbin/adbd | grep usb-ffs
+#           /dev/usb-ffs/adb/ep0
+#           /dev/usb-ffs/adb/ep1
+#           /dev/usb-ffs/adb/ep2
+#         strings sbin/adbd | grep 'usb_init'
+#           [ usb_init - using FunctionFS ]
+#
+#       Enabling functionfs instead is not merely a different way to the same
+#       place -- it CLEARS USB_G_ANDROID, because the two are siblings in the
+#       "USB Gadget Drivers" choice (drivers/usb/gadget/Kconfig). We did
+#       exactly that, booted it, and adb never enumerated: no USB device at
+#       all on the host.
+#
+#       So: USB_G_ANDROID on, and everything else in the choice off. The
+#       choice-sibling clearing in apply-defconfig.py does that for us.
+CONFIG_USB_G_ANDROID=y
+
+# CONFIG_USB_FUNCTIONFS
+#       Off, deliberately -- see above. It is not the adb path, and turning it
+#       on costs us USB_G_ANDROID.
+CONFIG_USB_FUNCTIONFS=n
+
+# CONFIG_DEVTMPFS
+#       OFF in the standard image.  TWRP's ueventd creates /dev, including
+#       the camera's runtime-allocated /dev/video* nodes, so the kernel does
+#       not need to provide a devtmpfs.  Leaving it off also means the
+#       standard kernel has one less filesystem the firmware can mount.
+#
+#       A VFE diagnostic build can need it on when ueventd is not in the
+#       picture.  Do NOT edit this line for that: build-vfe-kernel.sh makes
+#       a temporary copy with =y and passes it through KEEPLISTS, so the
+#       tracked profile stays =n and the tree stays clean.
+#
+#       Depends on HOTPLUG, which is already y.
+CONFIG_DEVTMPFS=n
+
+# ---- the pm8941 GPIO driver's debugfs --------------------------------------
+# CONFIG_GPIO_QPNP_PIN_DEBUG
+#     The driver's per-pin, per-parameter debugfs files are the only way to
+#     see (and to fix) a pm8941 pin's configuration at runtime: the SPMI
+#     debugfs cannot read those registers at all.  This is what settles the
+#     volume-key puzzle -- see Entry 87.
+CONFIG_GPIO_QPNP_PIN_DEBUG

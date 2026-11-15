@@ -1,0 +1,2640 @@
+diff --git a/arch/arm/boot/dts/msm-pm8941.dtsi b/arch/arm/boot/dts/msm-pm8941.dtsi
+index 8c65b144478..861efa0efe8 100644
+--- a/arch/arm/boot/dts/msm-pm8941.dtsi
++++ b/arch/arm/boot/dts/msm-pm8941.dtsi
+@@ -288,194 +288,327 @@
+ 		};
+ 
+ 		pm8941_gpios: gpios {
+-			spmi-dev-container;
+-			compatible = "qcom,qpnp-pin";
+-			gpio-controller;
+-			#gpio-cells = <2>;
+-			#address-cells = <1>;
+-			#size-cells = <1>;
+-			label = "pm8941-gpio";
+-
+-			gpio@c000 {
+-				reg = <0xc000 0x100>;
+-				qcom,pin-num = <1>;
+-			};
+-
+-			gpio@c100 {
+-				reg = <0xc100 0x100>;
+-				qcom,pin-num = <2>;
+-			};
+-
+-			gpio@c200 {
+-				reg = <0xc200 0x100>;
+-				qcom,pin-num = <3>;
+-			};
+-
+-			gpio@c300 {
+-				reg = <0xc300 0x100>;
+-				qcom,pin-num = <4>;
+-			};
+-
+-			gpio@c400 {
+-				reg = <0xc400 0x100>;
+-				qcom,pin-num = <5>;
+-			};
+-
+-			gpio@c500 {
+-				reg = <0xc500 0x100>;
+-				qcom,pin-num = <6>;
+-			};
+-
+-			gpio@c600 {
+-				reg = <0xc600 0x100>;
+-				qcom,pin-num = <7>;
+-			};
+-
+-			gpio@c700 {
+-				reg = <0xc700 0x100>;
+-				qcom,pin-num = <8>;
+-			};
+-
+-			gpio@c800 {
+-				reg = <0xc800 0x100>;
+-				qcom,pin-num = <9>;
+-			};
+-
+-			gpio@c900 {
+-				reg = <0xc900 0x100>;
+-				qcom,pin-num = <10>;
+-			};
+-
+-			gpio@ca00 {
+-				reg = <0xca00 0x100>;
+-				qcom,pin-num = <11>;
+-			};
+-
+-			gpio@cb00 {
+-				reg = <0xcb00 0x100>;
+-				qcom,pin-num = <12>;
+-			};
+-
+-			gpio@cc00 {
+-				reg = <0xcc00 0x100>;
+-				qcom,pin-num = <13>;
+-			};
+-
+-			gpio@cd00 {
+-				reg = <0xcd00 0x100>;
+-				qcom,pin-num = <14>;
+-			};
+-
+-			gpio@ce00 {
+-				reg = <0xce00 0x100>;
+-				qcom,pin-num = <15>;
+-			};
+-
+-			gpio@cf00 {
+-				reg = <0xcf00 0x100>;
+-				qcom,pin-num = <16>;
+-			};
+-
+-			gpio@d000 {
+-				reg = <0xd000 0x100>;
+-				qcom,pin-num = <17>;
+-			};
+-
+-			gpio@d100 {
+-				reg = <0xd100 0x100>;
+-				qcom,pin-num = <18>;
+-			};
+-
+-			gpio@d200 {
+-				reg = <0xd200 0x100>;
+-				qcom,pin-num = <19>;
+-			};
+-
+-			gpio@d300 {
+-				reg = <0xd300 0x100>;
+-				qcom,pin-num = <20>;
+-			};
+-
+-			gpio@d400 {
+-				reg = <0xd400 0x100>;
+-				qcom,pin-num = <21>;
+-			};
+-
+-			gpio@d500 {
+-				reg = <0xd500 0x100>;
+-				qcom,pin-num = <22>;
+-			};
+-
+-			gpio@d600 {
+-				reg = <0xd600 0x100>;
+-				qcom,pin-num = <23>;
+-			};
+-
+-			gpio@d700 {
+-				reg = <0xd700 0x100>;
+-				qcom,pin-num = <24>;
+-			};
+-
+-			gpio@d800 {
+-				reg = <0xd800 0x100>;
+-				qcom,pin-num = <25>;
+-			};
+-
+-			gpio@d900 {
+-				reg = <0xd900 0x100>;
+-				qcom,pin-num = <26>;
+-			};
+-
+-			gpio@da00 {
+-				reg = <0xda00 0x100>;
+-				qcom,pin-num = <27>;
+-			};
+-
+-			gpio@db00 {
+-				reg = <0xdb00 0x100>;
+-				qcom,pin-num = <28>;
+-			};
+-
+-			gpio@dc00 {
+-				reg = <0xdc00 0x100>;
+-				qcom,pin-num = <29>;
+-			};
+-
+-			gpio@dd00 {
+-				reg = <0xdd00 0x100>;
+-				qcom,pin-num = <30>;
+-			};
+-
+-			gpio@de00 {
+-				reg = <0xde00 0x100>;
+-				qcom,pin-num = <31>;
+-			};
+-
+-			gpio@df00 {
+-				reg = <0xdf00 0x100>;
+-				qcom,pin-num = <32>;
+-			};
+-
+-			gpio@e000 {
+-				reg = <0xe000 0x100>;
+-				qcom,pin-num = <33>;
+-			};
+-
+-			gpio@e100 {
+-				reg = <0xe100 0x100>;
+-				qcom,pin-num = <34>;
+-			};
+-
+-			gpio@e200 {
+-				reg = <0xe200 0x100>;
+-				qcom,pin-num = <35>;
+-			};
+-
+-			gpio@e300 {
+-				reg = <0xe300 0x100>;
+-				qcom,pin-num = <36>;
+-			};
+-		};
++					spmi-dev-container;
++					compatible = "qcom,qpnp-pin";
++					gpio-controller;
++					#gpio-cells = <0x02>;
++					#address-cells = <1>;
++					#size-cells = <1>;
++					label = "pm8941-gpio";
++
++					gpio@c000 {
++						reg = <0xc000 0x100>;
++						qcom,pin-num = <0x01>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@c100 {
++						reg = <0xc100 0x100>;
++						qcom,pin-num = <0x02>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x00>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++					};
++
++					gpio@c200 {
++						reg = <0xc200 0x100>;
++						qcom,pin-num = <0x03>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x00>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++					};
++
++					gpio@c300 {
++						reg = <0xc300 0x100>;
++						qcom,pin-num = <0x04>;
++					};
++
++					gpio@c400 {
++						reg = <0xc400 0x100>;
++						qcom,pin-num = <0x05>;
++					};
++
++					gpio@c500 {
++						reg = <0xc500 0x100>;
++						qcom,pin-num = <0x06>;
++					};
++
++					gpio@c600 {
++						reg = <0xc600 0x100>;
++						qcom,pin-num = <0x07>;
++					};
++
++					gpio@c700 {
++						reg = <0xc700 0x100>;
++						qcom,pin-num = <0x08>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@c800 {
++						reg = <0xc800 0x100>;
++						qcom,pin-num = <0x09>;
++					};
++
++					gpio@c900 {
++						reg = <0xc900 0x100>;
++						qcom,pin-num = <0x0a>;
++					};
++
++					gpio@ca00 {
++						reg = <0xca00 0x100>;
++						qcom,pin-num = <0x0b>;
++					};
++
++					gpio@cb00 {
++						reg = <0xcb00 0x100>;
++						qcom,pin-num = <0x0c>;
++					};
++
++					gpio@cc00 {
++						reg = <0xcc00 0x100>;
++						qcom,pin-num = <0x0d>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x04>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@cd00 {
++						reg = <0xcd00 0x100>;
++						qcom,pin-num = <0x0e>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@ce00 {
++						reg = <0xce00 0x100>;
++						qcom,pin-num = <0x0f>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x03>;
++						qcom,src-sel = <0x02>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@cf00 {
++						reg = <0xcf00 0x100>;
++						qcom,pin-num = <0x10>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x03>;
++						qcom,src-sel = <0x03>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@d000 {
++						reg = <0xd000 0x100>;
++						qcom,pin-num = <0x11>;
++					};
++
++					gpio@d100 {
++						reg = <0xd100 0x100>;
++						qcom,pin-num = <0x12>;
++					};
++
++					gpio@d200 {
++						reg = <0xd200 0x100>;
++						qcom,pin-num = <0x13>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@d300 {
++						reg = <0xd300 0x100>;
++						qcom,pin-num = <0x14>;
++					};
++
++					gpio@d400 {
++						reg = <0xd400 0x100>;
++						qcom,pin-num = <0x15>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x04>;
++						qcom,src-sel = <0x00>;
++					};
++
++					gpio@d500 {
++						reg = <0xd500 0x100>;
++						qcom,pin-num = <0x16>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@d600 {
++						reg = <0xd600 0x100>;
++						qcom,pin-num = <0x17>;
++					};
++
++					gpio@d700 {
++						reg = <0xd700 0x100>;
++						qcom,pin-num = <0x18>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@d800 {
++						reg = <0xd800 0x100>;
++						qcom,pin-num = <0x19>;
++					};
++
++					gpio@d900 {
++						reg = <0xd900 0x100>;
++						qcom,pin-num = <0x1a>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,out-strength = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@da00 {
++						reg = <0xda00 0x100>;
++						qcom,pin-num = <0x1b>;
++					};
++
++					gpio@db00 {
++						reg = <0xdb00 0x100>;
++						qcom,pin-num = <0x1c>;
++					};
++
++					gpio@dc00 {
++						reg = <0xdc00 0x100>;
++						qcom,pin-num = <0x1d>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x00>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@dd00 {
++						reg = <0xdd00 0x100>;
++						qcom,pin-num = <0x1e>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@de00 {
++						reg = <0xde00 0x100>;
++						qcom,pin-num = <0x1f>;
++					};
++
++					gpio@df00 {
++						reg = <0xdf00 0x100>;
++						qcom,pin-num = <0x20>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x04>;
++						qcom,src-sel = <0x02>;
++						qcom,vin-sel = <0x02>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@e000 {
++						reg = <0xe000 0x100>;
++						qcom,pin-num = <0x21>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@e100 {
++						reg = <0xe100 0x100>;
++						qcom,pin-num = <0x22>;
++						status = "ok";
++						qcom,mode = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@e200 {
++						reg = <0xe200 0x100>;
++						qcom,pin-num = <0x23>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x05>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++
++					gpio@e300 {
++						reg = <0xe300 0x100>;
++						qcom,pin-num = <0x24>;
++						status = "ok";
++						qcom,mode = <0x01>;
++						qcom,output-type = <0x00>;
++						qcom,pull = <0x04>;
++						qcom,vin-sel = <0x02>;
++						qcom,src-sel = <0x00>;
++						qcom,master-en = <0x01>;
++					};
++				};
+ 
+ 		pm8941_mpps: mpps {
+ 			spmi-dev-container;
+diff --git a/arch/arm/boot/dts/msm8974-hammerhead/msm8974-hammerhead.dtsi b/arch/arm/boot/dts/msm8974-hammerhead/msm8974-hammerhead.dtsi
+index d3f134fae54..310a09d7645 100644
+--- a/arch/arm/boot/dts/msm8974-hammerhead/msm8974-hammerhead.dtsi
++++ b/arch/arm/boot/dts/msm8974-hammerhead/msm8974-hammerhead.dtsi
+@@ -403,6 +403,27 @@
+ 		qcom,pull = <0>;		/* QPNP_PIN_PULL_UP_30 */
+ 		qcom,vin-sel = <2>;		/* QPNP_PIN_VIN2 */
+ 		qcom,src-sel = <0>;		/* QPNP_PIN_SEL_FUNC_CONSTANT */
++	/*
++	 * GPIO 2 (KEY_UP) and GPIO 3 (KEY_DOWN) are the two volume keys,
++	 * and they need "master-en" -- the pin's digital path.
++	 *
++	 * The vendor's tree leaves it out for these two pins, and that is
++	 * the bug: the driver reads every pin's configuration out of the
++	 * PMIC's registers and only overrides what the device tree says,
++	 * so a pin with no "master-en" keeps whatever the PMIC happened
++	 * to be left with.  The PMIC's registers survive a warm reboot, so
++	 * a pin left with the master enable off stays dead for good -- the
++	 * pad cannot be read as an input, the key's interrupt never fires,
++	 * and the key does nothing at all.  Which of the two keys was dead
++	 * changed from boot to boot, because that is whichever pin the
++	 * PMIC had been left with.
++	 *
++	 * GPIO 1 (the earjack) has had "master-en" all along, which is why
++	 * it worked.
++	 *
++	 * See Entry 87 of airgap-standalone.log.md.
++	 */
++		qcom,master-en = <1>;
+ 	};
+ 
+ 	gpio@c200 { /* GPIO 3 */
+@@ -411,6 +432,7 @@
+ 		qcom,pull = <0>;		/* QPNP_PIN_PULL_UP_30 */
+ 		qcom,vin-sel = <2>;		/* QPNP_PIN_VIN2 */
+ 		qcom,src-sel = <0>;		/* QPNP_PIN_SEL_FUNC_CONSTANT */
++		qcom,master-en = <1>;
+ 	};
+ 
+ 	gpio@c300 { /* GPIO 4 */
+diff --git a/arch/arm/kernel/machine_kexec.c b/arch/arm/kernel/machine_kexec.c
+index 2daf338b0d9..94c77d6c80c 100644
+--- a/arch/arm/kernel/machine_kexec.c
++++ b/arch/arm/kernel/machine_kexec.c
+@@ -14,6 +14,8 @@
+ #include <asm/cacheflush.h>
+ #include <asm/mach-types.h>
+ #include <asm/system_misc.h>
++#include <asm/highmem.h>
++#include <asm/uaccess.h>
+ 
+ extern const unsigned char relocate_new_kernel[];
+ extern const unsigned int relocate_new_kernel_size;
+@@ -30,8 +32,34 @@ static atomic_t waiting_for_crash_ipi;
+  * This prevents breakage of crash_notes attribute in kernel/ksysfs.c.
+  */
+ 
++/* Destination physical address of the separate DTB segment, found at
++ * load time from the userspace buffer.  At machine_kexec time the segment
++ * has not been copied to its destination yet (relocate_new_kernel does
++ * that), so reading the destination there only sees stale memory. */
++static unsigned long kexec_dtb_phys;
++
+ int machine_kexec_prepare(struct kimage *image)
+ {
++	int i;
++
++	kexec_dtb_phys = 0;
++	pr_info("kexec_prepare: nr_segments=%d\n", image->nr_segments);
++
++	for (i = 0; i < image->nr_segments; i++) {
++		unsigned char magic[4];
++		void __user *ubuf = image->segment[i].buf;
++
++		if (image->segment[i].bufsz < sizeof(magic))
++			continue;
++		if (copy_from_user(magic, ubuf, sizeof(magic)))
++			continue;
++		if (magic[0] == 0xd0 && magic[1] == 0x0d &&
++		    magic[2] == 0xfe && magic[3] == 0xed) {
++			kexec_dtb_phys = image->segment[i].mem;
++			pr_info("kexec_prepare seg %d: DTB at %08lx\n",
++				i, kexec_dtb_phys);
++		}
++	}
+ 	return 0;
+ }
+ 
+@@ -104,6 +132,18 @@ void machine_crash_shutdown(struct pt_regs *regs)
+  */
+ void (*kexec_reinit)(void);
+ 
++/*
++ * Find the DTB segment loaded by kexec-tools.  The generic ARM entry
++ * assumes an ATAGS block 0x7000 bytes below the zImage, which is too
++ * small for a modern DTB (hammerhead's is ~176 KB).  kexec-tools puts
++ * the DTB in its own segment, so pass that address in r2 instead.
++ */
++static unsigned long kexec_dtb_address(struct kimage *image)
++{
++	(void)image;
++	return kexec_dtb_phys;
++}
++
+ void machine_kexec(struct kimage *image)
+ {
+ 	unsigned long page_list;
+@@ -119,16 +159,39 @@ void machine_kexec(struct kimage *image)
+ 	    page_to_pfn(image->control_code_page) << PAGE_SHIFT;
+ 	reboot_code_buffer = page_address(image->control_code_page);
+ 
+-	/* Prepare parameters for reboot_code_buffer*/
+-	kexec_start_address = image->start;
+-	kexec_indirection_page = page_list;
+-	kexec_mach_type = machine_arch_type;
+-	kexec_boot_atags = image->start - KEXEC_ARM_ZIMAGE_OFFSET + KEXEC_ARM_ATAGS_OFFSET;
+-
+ 	/* copy our kernel relocation code to the control code page */
+ 	memcpy(reboot_code_buffer,
+ 	       relocate_new_kernel, relocate_new_kernel_size);
+ 
++	/*
++	 * Prepare the parameters in the *copied* block, not in the
++	 * original symbols: with CONFIG_STRICT_MEMORY_RWX the kernel
++	 * text is read-only, and writing kexec_start_address there
++	 * faults.  relocate_new_kernel_size covers the parameter words
++	 * at the end of the copied code.
++	 */
++	{
++		unsigned long *p;
++		unsigned long dtb = kexec_dtb_address(image);
++
++		pr_info("kexec: entry=%08lx dtb=%08lx head=%08lx\n",
++			(unsigned long)image->start, dtb, page_list);
++
++#define KEXEC_PARAM(name, value)					\
++	do {								\
++		p = (void *)((char *)reboot_code_buffer +		\
++			((char *)&name - (char *)relocate_new_kernel));	\
++		*p = (value);						\
++	} while (0)
++
++		KEXEC_PARAM(kexec_start_address, image->start);
++		KEXEC_PARAM(kexec_indirection_page, page_list);
++		KEXEC_PARAM(kexec_mach_type, machine_arch_type);
++		KEXEC_PARAM(kexec_boot_atags,
++			    dtb ? dtb : (image->start - KEXEC_ARM_ZIMAGE_OFFSET +
++					 KEXEC_ARM_ATAGS_OFFSET));
++#undef KEXEC_PARAM
++	}
+ 
+ 	flush_icache_range((unsigned long) reboot_code_buffer,
+ 			   (unsigned long) reboot_code_buffer + KEXEC_CONTROL_PAGE_SIZE);
+diff --git a/arch/arm/mach-msm/Kconfig b/arch/arm/mach-msm/Kconfig
+index 5066ff37903..bf6ba22ad7f 100644
+--- a/arch/arm/mach-msm/Kconfig
++++ b/arch/arm/mach-msm/Kconfig
+@@ -2477,6 +2477,35 @@ config MSM_DLOAD_MODE
+ 		make the kernel reboot on a kernel panic - that must be
+ 		enabled via another mechanism.
+ 
++config MEMORY_WIPE
++	bool "Wipe RAM when booting with wipe= (MSM8974)"
++	depends on ARCH_MSM8974
++	default n
++	help
++	  When the kernel is booted with wipe= on the command line, zero
++	  every page of RAM that this kernel has not reserved, flush the
++	  caches and power off.  Used as the final action of a shutdown or
++	  reboot so the previous kernel's memory is not left in DRAM.
++
++	  wipe=test[:MB] wipes a bounded amount and continues booting, for
++	  testing.  wipe=verify additionally samples the wiped pages.
++
++config MEMORY_WIPE_ON_POWEROFF
++	bool "Wipe RAM on poweroff via a recovery reboot (MSM8974)"
++	depends on MEMORY_WIPE
++	default n
++	help
++	  Intercept LINUX_REBOOT_CMD_POWER_OFF.  Instead of powering off,
++	  write a marker into the persistent RAM and restart with the
++	  bootloader's "recovery" restart reason (IMEM, the same one
++	  reboot bootloader uses).  The next boot, at mem_init(), sees the
++	  marker, runs the wipe and powers off before userspace exists.
++
++	  This is kernel and RAM only: no NAND write, no userspace, no
++	  second kernel and no kexec.  If the recovery boot does not
++	  happen, the marker is gone with the RAM and the wipe is not
++	  retried.
++
+ config MSM_JTAG
+ 	bool "Debug and ETM trace support across power collapse"
+ 	help
+diff --git a/arch/arm/mach-msm/Makefile b/arch/arm/mach-msm/Makefile
+index 55451b8914c..81a71dcb765 100644
+--- a/arch/arm/mach-msm/Makefile
++++ b/arch/arm/mach-msm/Makefile
+@@ -9,6 +9,7 @@ obj-y += modem_notifier.o
+ obj-$(CONFIG_USE_OF) += board-dt.o
+ obj-$(CONFIG_DEBUG_FS) += nohlt.o clock-debug.o
+ obj-$(CONFIG_KEXEC) += msm_kexec.o
++obj-$(CONFIG_MEMORY_WIPE) += wipe.o
+ 
+ obj-$(CONFIG_MSM_PROC_COMM) += proc_comm.o
+ ifndef CONFIG_ARCH_MSM8X60
+diff --git a/arch/arm/mach-msm/msm_kexec.c b/arch/arm/mach-msm/msm_kexec.c
+index a1b19ff85fc..aa19bdc5b37 100644
+--- a/arch/arm/mach-msm/msm_kexec.c
++++ b/arch/arm/mach-msm/msm_kexec.c
+@@ -13,18 +13,29 @@
+ #include <linux/kexec.h>
+ #include <linux/io.h>
+ 
+-#ifdef CONFIG_MSM_WATCHDOG
++#if defined(CONFIG_MSM_WATCHDOG) || defined(CONFIG_MSM_WATCHDOG_V2)
+ #include <mach/msm_iomap.h>
++#endif
+ 
++#ifdef CONFIG_MSM_WATCHDOG
+ #define WDT0_EN        (MSM_TMR_BASE + 0x40)
+ #endif
+ 
++#ifdef CONFIG_MSM_WATCHDOG_V2
++extern void msm_watchdog_v2_disable(void);
++#endif
++
+ void arch_kexec(void)
+ {
+ #ifdef CONFIG_MSM_WATCHDOG
+ 	/* Prevent watchdog from resetting SoC */
+ 	writel(0, WDT0_EN);
+ 	pr_crit("KEXEC: MSM Watchdog Exit - Deactivated\n");
++#endif
++#ifdef CONFIG_MSM_WATCHDOG_V2
++	/* The V2 watchdog keeps running across the jump and would reset
++	 * the SoC while the new kernel is still booting/wiping. */
++	msm_watchdog_v2_disable();
+ #endif
+ 	return;
+ }
+diff --git a/arch/arm/mach-msm/msm_watchdog_v2.c b/arch/arm/mach-msm/msm_watchdog_v2.c
+index f73dab3ec42..955d5f05bf3 100644
+--- a/arch/arm/mach-msm/msm_watchdog_v2.c
++++ b/arch/arm/mach-msm/msm_watchdog_v2.c
+@@ -75,6 +75,7 @@ struct msm_watchdog_data {
+  * By default watchdog is turned on
+  */
+ static int enable = 1;
++static struct msm_watchdog_data *wdog_global;
+ module_param(enable, int, 0);
+ 
+ /*
+@@ -563,6 +564,7 @@ static int __devinit msm_watchdog_probe(struct platform_device *pdev)
+ 		goto err;
+ 	wdog_dd->dev = &pdev->dev;
+ 	platform_set_drvdata(pdev, wdog_dd);
++	wdog_global = wdog_dd;
+ 	cpumask_clear(&wdog_dd->alive_mask);
+ 	INIT_WORK(&wdog_dd->init_dogwork_struct, init_watchdog_work);
+ 	INIT_DELAYED_WORK(&wdog_dd->dogwork_struct, pet_watchdog_work);
+@@ -590,6 +592,19 @@ static struct platform_driver msm_watchdog_driver = {
+ 	},
+ };
+ 
++/* Called from arch_kexec() just before jumping to the new kernel.
++ * The watchdog keeps running across the jump and would reset the SoC
++ * while the new kernel is still booting. */
++void msm_watchdog_v2_disable(void)
++{
++	if (wdog_global) {
++		__raw_writel(0, wdog_global->base + WDT0_EN);
++		mb();
++		pr_crit("MSM Watchdog V2 deactivated for kexec\n");
++	}
++}
++EXPORT_SYMBOL(msm_watchdog_v2_disable);
++
+ static int __devinit init_watchdog(void)
+ {
+ 	return platform_driver_register(&msm_watchdog_driver);
+diff --git a/arch/arm/mach-msm/restart.c b/arch/arm/mach-msm/restart.c
+index d208b4c97e2..d9eca23e3dc 100644
+--- a/arch/arm/mach-msm/restart.c
++++ b/arch/arm/mach-msm/restart.c
+@@ -289,8 +289,23 @@ static void msm_restart_prepare(const char *cmd)
+ 		lge_set_restart_reason(LAF_DLOAD_MODE);
+ 
+ 	if (in_panic) {
+-		lge_set_panic_reason();
+-
++		/*
++		 * A panic used to be reported to the bootloader with
++		 * LGE's "kernel error" magic (lge_set_panic_reason()).
++		 * The bootloader treats that magic as a fatal crash and
++		 * powers the phone off instead of restarting it, so a
++		 * crash left the device dead: the only way back was the
++		 * power key, and there was no way to read the panic.
++		 *
++		 * We want the opposite.  The reason written above
++		 * (0x77665501 -- the same one a normal restart writes)
++		 * is kept, so the bootloader starts the system again: the
++		 * device comes back on its own, into whatever is in the
++		 * boot partition, and the panic can be read out of the
++		 * persistent ram console (/proc/last_kmsg) on the next
++		 * boot.  The download mode is still cleared, so a panic
++		 * does not drop the phone into the bootloader.
++		 */
+ 		if (!lge_is_handle_panic_enable())
+ 			set_dload_mode(0);
+ 	}
+diff --git a/arch/arm/mach-msm/wipe.c b/arch/arm/mach-msm/wipe.c
+new file mode 100644
+index 00000000000..ec2eb80b693
+--- /dev/null
++++ b/arch/arm/mach-msm/wipe.c
+@@ -0,0 +1,483 @@
++/*
++ * RAM wipe for the MSM8974 hammerhead.
++ *
++ * The kernel is kexec'd with "wipe=" on the command line.  This runs at
++ * the top of mem_init(), after the bootmem bitmap and mem_map exist but
++ * before free_all_bootmem() hands the free pages to the page allocator.
++ * The bootmem bitmap is therefore the authoritative record of which
++ * low-memory pages are free; highmem is not covered by bootmem and is
++ * walked through memblock instead.
++ *
++ * This is deliberately not "wipe everything except _stext.._end": the
++ * page tables, mem_map and other bootmem allocations live outside the
++ * kernel image and would crash the machine if they were zeroed.
++ */
++
++#include <linux/init.h>
++#include <linux/kernel.h>
++#include <linux/string.h>
++#include <linux/memblock.h>
++#include <linux/mm.h>
++#include <linux/mmzone.h>
++#include <linux/bootmem.h>
++#include <linux/highmem.h>
++#include <linux/bitops.h>
++#include <linux/io.h>
++#include <linux/delay.h>
++#include <linux/smp.h>
++#include <linux/irqflags.h>
++#include <linux/reboot.h>
++
++#include <asm/cacheflush.h>
++#include <asm/barrier.h>
++#include <asm/highmem.h>
++#include <asm/memory.h>
++
++#include <mach/msm_iomap.h>
++#include <mach/scm.h>
++
++#define SCM_IO_DISABLE_PMIC_ARBITER	1
++
++#define WIPE_MODE_NONE		0
++#define WIPE_MODE_ALL		1
++#define WIPE_MODE_TEST		2
++#define WIPE_MODE_INFO		3
++
++#ifdef CONFIG_MEMORY_WIPE_ON_POWEROFF
++/*
++ * A poweroff writes this marker into the spare tail of the persistent RAM
++ * the bootloader preserves across a warm reset (the ram console uses the
++ * first 256 KB; the whole 1 MB is reserved).  The next boot reads it at
++ * mem_init(), wipes, and powers off before userspace exists.
++ *
++ * The marker is RAM only: if the recovery boot does not happen, it is gone
++ * with the RAM (and so are the secrets).  Nothing is written to NAND.
++ */
++#define KRUX_MARKER_PHYS	0x100F0000UL
++#define KRUX_MARKER_MAGIC	0x4b525857	/* "KRXW" */
++
++struct krux_wipe_marker {
++	u32 magic;
++	u32 magic_inv;
++	u32 seq;
++	u32 crc;
++};
++
++int wipe_from_marker;
++
++static struct krux_wipe_marker *krux_marker(void)
++{
++	return (struct krux_wipe_marker *)__va(KRUX_MARKER_PHYS);
++}
++
++static u32 krux_crc32(const void *buf, size_t len)
++{
++	const u8 *p = buf;
++	u32 crc = 0xffffffff;
++	int i;
++
++	while (len--) {
++		crc ^= *p++;
++		for (i = 0; i < 8; i++)
++			crc = (crc >> 1) ^ (0xedb88320 & -(crc & 1));
++	}
++	return ~crc;
++}
++
++static bool krux_marker_valid(void)
++{
++	struct krux_wipe_marker *m = krux_marker();
++
++	return m->magic == KRUX_MARKER_MAGIC &&
++	       m->magic_inv == ~KRUX_MARKER_MAGIC &&
++	       m->crc == krux_crc32(m, offsetof(struct krux_wipe_marker, crc));
++}
++
++static void krux_marker_write(u32 magic)
++{
++	struct krux_wipe_marker *m = krux_marker();
++
++	m->magic = magic;
++	m->magic_inv = ~magic;
++	m->seq++;
++	m->crc = krux_crc32(m, offsetof(struct krux_wipe_marker, crc));
++	/* The reset does not flush the cache; push it to DRAM ourselves. */
++	flush_cache_all();
++}
++
++void krux_wipe_reboot(void)
++{
++	pr_crit("wipe: marking RAM and restarting into recovery\n");
++	krux_marker_write(KRUX_MARKER_MAGIC);
++	kernel_restart("recovery");
++}
++#endif
++
++static int wipe_mode;
++static int wipe_verify;
++static unsigned long wipe_test_mb;
++
++/* 0 means "no limit". */
++static phys_addr_t wipe_budget;
++static phys_addr_t wipe_done;
++static int wipe_poweroff_pending;
++
++static int __init wipe_setup(char *str)
++{
++	if (!str || !*str)
++		return 1;
++
++	if (!strcmp(str, "1") || !strcmp(str, "all")) {
++		wipe_mode = WIPE_MODE_ALL;
++		return 1;
++	}
++	if (!strcmp(str, "verify")) {
++		wipe_mode = WIPE_MODE_ALL;
++		wipe_verify = 1;
++		return 1;
++	}
++	if (!strcmp(str, "info")) {
++		wipe_mode = WIPE_MODE_INFO;
++		return 1;
++	}
++	if (!strncmp(str, "test", 4)) {
++		wipe_mode = WIPE_MODE_TEST;
++		if (str[4] == ':')
++			wipe_test_mb = simple_strtoul(str + 5, NULL, 0);
++		return 1;
++	}
++
++	pr_err("wipe: unknown mode '%s'\n", str);
++	return 1;
++}
++early_param("wipe", wipe_setup);
++
++static bool __init wipe_take(phys_addr_t len)
++{
++	if (wipe_budget) {
++		if (len > wipe_budget)
++			return false;
++		wipe_budget -= len;
++	}
++	wipe_done += len;
++	return true;
++}
++
++static void __init wipe_low_page(unsigned long pfn)
++{
++	if (!wipe_take(PAGE_SIZE))
++		return;
++	memset(__va(PFN_PHYS(pfn)), 0, PAGE_SIZE);
++}
++
++#ifdef CONFIG_HIGHMEM
++static void __init wipe_high_page(unsigned long pfn)
++{
++	void *v;
++
++	if (!wipe_take(PAGE_SIZE))
++		return;
++	v = kmap_atomic_pfn(pfn);
++	memset(v, 0, PAGE_SIZE);
++	kunmap_atomic(v);
++}
++#endif
++
++static void __init wipe_high_range(phys_addr_t start, phys_addr_t end)
++{
++#ifdef CONFIG_HIGHMEM
++	unsigned long pfn, last;
++
++	pfn = PFN_UP(start);
++	last = PFN_DOWN(end);
++	for (; pfn < last; pfn++) {
++		void *v;
++
++		if (!wipe_take(PAGE_SIZE))
++			return;
++		v = kmap_atomic_pfn(pfn);
++		memset(v, 0, PAGE_SIZE);
++		kunmap_atomic(v);
++	}
++#else
++	(void)start;
++	(void)end;
++#endif
++}
++
++static void __init wipe_highmem(void)
++{
++#ifdef CONFIG_HIGHMEM
++	struct memblock_region *r;
++
++	for_each_memblock(memory, r) {
++		phys_addr_t start = r->base;
++		phys_addr_t end = r->base + r->size;
++		struct memblock_region *res;
++		phys_addr_t cur;
++
++		if (end <= PFN_PHYS(max_low_pfn))
++			continue;
++		if (start < PFN_PHYS(max_low_pfn))
++			start = PFN_PHYS(max_low_pfn);
++		if (start >= end)
++			continue;
++
++		cur = start;
++		for_each_memblock(reserved, res) {
++			phys_addr_t rs = res->base;
++			phys_addr_t re = res->base + res->size;
++
++			if (re <= cur || rs >= end)
++				continue;
++			if (rs > cur)
++				wipe_high_range(cur, min(rs, end));
++			if (re > cur)
++				cur = re;
++			if (cur >= end)
++				break;
++		}
++		if (cur < end)
++			wipe_high_range(cur, end);
++		if (wipe_budget && !wipe_budget)
++			break;
++	}
++#endif
++}
++
++static void __init wipe_lowmem(void)
++{
++	bootmem_data_t *bdata = NODE_DATA(0)->bdata;
++	unsigned long pfn, last;
++	unsigned long idx;
++
++	if (!bdata || !bdata->node_bootmem_map)
++		return;
++
++	pfn = bdata->node_min_pfn;
++	last = bdata->node_low_pfn;
++	idx = 0;
++
++	while (pfn < last) {
++		unsigned long run;
++
++		if (wipe_budget && !wipe_budget)
++			return;
++
++		/* Skip allocated pages.  The bitmap is word-sized, so
++		 * look for a zero bit rather than testing every page. */
++		run = find_next_zero_bit(bdata->node_bootmem_map,
++					 last - bdata->node_min_pfn, idx);
++		if (run >= last - bdata->node_min_pfn)
++			break;
++		idx = run;
++		pfn = bdata->node_min_pfn + idx;
++		wipe_low_page(pfn);
++		idx++;
++	}
++}
++
++static void __init wipe_all(void)
++{
++	if (wipe_test_mb)
++		wipe_budget = (phys_addr_t)wipe_test_mb << 20;
++
++	wipe_lowmem();
++	wipe_highmem();
++	pr_info("wipe: %llu MB wiped\n",
++		(unsigned long long)(wipe_done >> 20));
++}
++
++static int __init wipe_check_page(unsigned long pfn)
++{
++	const u8 *v;
++	int i, bad = 0;
++
++#ifdef CONFIG_HIGHMEM
++	v = kmap_atomic_pfn(pfn);
++#else
++	v = __va(PFN_PHYS(pfn));
++#endif
++	for (i = 0; i < PAGE_SIZE; i++) {
++		if (v[i]) {
++			bad = 1;
++			break;
++		}
++	}
++#ifdef CONFIG_HIGHMEM
++	kunmap_atomic((void *)v);
++#endif
++	return bad;
++}
++
++static int __init wipe_check_lowmem(void)
++{
++	bootmem_data_t *bdata = NODE_DATA(0)->bdata;
++	unsigned long pfn, last;
++	unsigned long idx;
++	int bad = 0;
++
++	if (!bdata || !bdata->node_bootmem_map)
++		return 0;
++	pfn = bdata->node_min_pfn;
++	last = bdata->node_low_pfn;
++	idx = 0;
++	while (pfn < last) {
++		unsigned long run = find_next_zero_bit(bdata->node_bootmem_map,
++						       last - bdata->node_min_pfn,
++						       idx);
++		if (run >= last - bdata->node_min_pfn)
++			break;
++		idx = run;
++		pfn = bdata->node_min_pfn + idx;
++		bad += wipe_check_page(pfn);
++		idx++;
++	}
++	return bad;
++}
++
++static void __init wipe_verify_all(void)
++{
++	int bad = wipe_check_lowmem();
++
++	if (bad)
++		pr_err("wipe: verification FAILED (%d sampled pages non-zero)\n",
++		       bad);
++	else
++		pr_info("wipe: verification OK\n");
++}
++
++static void __init wipe_force_power_off(void)
++{
++	pr_crit("wipe: forcing power off\n");
++
++#ifdef CONFIG_MSM_RESTART_V2
++	/* Avoid an SPMI transaction when PS_HOLD is lowered. */
++	scm_call_atomic1(SCM_SVC_PWR, SCM_IO_DISABLE_PMIC_ARBITER, 0);
++	__raw_writel(0, MSM_MPM2_PSHOLD_BASE);
++#else
++	__raw_writel(0, MSM_TLMM_BASE + 0x820);
++#endif
++	mdelay(10000);
++}
++
++void __init wipe_main(void)
++{
++#ifdef CONFIG_MEMORY_WIPE_ON_POWEROFF
++	if (!wipe_mode && krux_marker_valid()) {
++		wipe_from_marker = 1;
++		wipe_mode = WIPE_MODE_ALL;
++		pr_crit("wipe: poweroff marker found, wiping this boot\n");
++	}
++#endif
++	if (!wipe_mode)
++		return;
++
++	/* IRQs are already disabled here.  Do not touch preempt_count:
++	 * the scheduler is not initialised yet. */
++	local_irq_disable();
++	local_fiq_disable();
++
++	pr_crit("wipe: start (mode %d, test %lu MB, verify %d)\n",
++		wipe_mode, wipe_test_mb, wipe_verify);
++
++	if (wipe_mode == WIPE_MODE_INFO) {
++		bootmem_data_t *bdata = NODE_DATA(0)->bdata;
++		unsigned long pfn, last, idx = 0, free = 0;
++
++		pr_info("wipe: memblock memory=%llu MB reserved=%llu MB\n",
++			(unsigned long long)(memblock.memory.total_size >> 20),
++			(unsigned long long)(memblock.reserved.total_size >> 20));
++		pr_info("wipe: max_low_pfn=%lu max_pfn=%lu\n",
++			max_low_pfn, max_pfn);
++		pr_info("wipe: mem_map phys=0x%llx size=%lu KB\n",
++			(unsigned long long)__pa(mem_map),
++			(unsigned long)(max_pfn * sizeof(struct page)) >> 10);
++		if (bdata && bdata->node_bootmem_map) {
++			pfn = bdata->node_min_pfn;
++			last = bdata->node_low_pfn;
++			while (pfn < last) {
++				unsigned long run = find_next_zero_bit(
++					bdata->node_bootmem_map,
++					last - bdata->node_min_pfn, idx);
++				if (run >= last - bdata->node_min_pfn)
++					break;
++				if (free < 8)
++					pr_info("wipe: free pfn %lu phys 0x%llx\n",
++						bdata->node_min_pfn + run,
++						(unsigned long long)PFN_PHYS(
++							bdata->node_min_pfn + run));
++				free++;
++				idx = run + 1;
++			}
++			pr_info("wipe: bootmem min=%lu low=%lu free=%lu pages\n",
++				bdata->node_min_pfn, bdata->node_low_pfn,
++				free);
++			{
++				unsigned long p, lim, s = 0;
++				int in = 0;
++
++				lim = min(bdata->node_low_pfn,
++					  (unsigned long)(64 << 20) >> PAGE_SHIFT);
++				for (p = bdata->node_min_pfn; p < lim; p++) {
++					int used = test_bit(
++						p - bdata->node_min_pfn,
++						bdata->node_bootmem_map);
++					if (used && !in) {
++						s = p;
++						in = 1;
++					} else if (!used && in) {
++						pr_info("wipe: used 0x%llx..0x%llx\n",
++							(unsigned long long)PFN_PHYS(s),
++							(unsigned long long)PFN_PHYS(p));
++						in = 0;
++					}
++				}
++				if (in)
++					pr_info("wipe: used 0x%llx..0x%llx\n",
++						(unsigned long long)PFN_PHYS(s),
++						(unsigned long long)PFN_PHYS(lim));
++			}
++		}
++		return;
++	}
++
++	if (num_online_cpus() > 1)
++		smp_send_stop();
++
++	wipe_all();
++
++	flush_cache_all();
++	dsb();
++	isb();
++
++	if (wipe_verify)
++		wipe_verify_all();
++
++	if (wipe_mode == WIPE_MODE_TEST) {
++		pr_crit("wipe: test complete, continuing boot\n");
++		return;
++	}
++
++	/* Power off from kernel_init(), after the PMIC/restart drivers
++	 * have initialised, so the normal poweroff path is used. */
++	wipe_poweroff_pending = 1;
++}
++
++void wipe_poweroff(void)
++{
++	if (!wipe_poweroff_pending)
++		return;
++
++#ifdef CONFIG_MEMORY_WIPE_ON_POWEROFF
++	if (wipe_from_marker)
++		krux_marker_write(0);
++#endif
++	pr_crit("wipe: powering off\n");
++	kernel_power_off();
++
++	/* kernel_power_off() should not return. */
++	wipe_force_power_off();
++	while (1)
++		barrier();
++}
+diff --git a/arch/arm/mm/init.c b/arch/arm/mm/init.c
+index dbf6c6a62dc..cc4c3813f8d 100644
+--- a/arch/arm/mm/init.c
++++ b/arch/arm/mm/init.c
+@@ -26,6 +26,10 @@
+ 
+ #include <asm/mach-types.h>
+ #include <asm/memblock.h>
++
++#ifdef CONFIG_MEMORY_WIPE
++extern void wipe_main(void);
++#endif
+ #include <asm/prom.h>
+ #include <asm/sections.h>
+ #include <asm/setup.h>
+@@ -744,6 +748,9 @@ static void __init free_highpages(void)
+  */
+ void __init mem_init(void)
+ {
++#ifdef CONFIG_MEMORY_WIPE
++	wipe_main();
++#endif
+ 	unsigned long reserved_pages, free_pages;
+ 	struct memblock_region *reg;
+ 	int i;
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_buf_mgr.c b/drivers/media/platform/msm/camera_v2/isp/msm_buf_mgr.c
+index 86b044ad21a..a629aebf491 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_buf_mgr.c
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_buf_mgr.c
+@@ -280,6 +280,23 @@ static int msm_isp_buf_unprepare(struct msm_isp_buf_mgr *buf_mgr,
+ 	return 0;
+ }
+ 
++static void msm_isp_dump_bufq(struct msm_isp_bufq *bufq)
++{
++	int i;
++	struct msm_isp_buffer *bi;
++
++	pr_err("%s: bufq %d type %d num_bufs %d clients %d\n",
++		__func__, bufq->bufq_handle, bufq->buf_type, bufq->num_bufs,
++		bufq->buf_client_count);
++	for (i = 0; i < bufq->num_bufs; i++) {
++		bi = &bufq->bufs[i];
++		pr_err("%s:   buf %d: state %d get %d put %d used %d/%d reuse %d\n",
++			__func__, i, bi->state, bi->buf_get_count,
++			bi->buf_put_count, bi->buf_used[0], bi->buf_used[1],
++			bi->buf_reuse_flag);
++	}
++}
++
+ static int msm_isp_get_buf(struct msm_isp_buf_mgr *buf_mgr, uint32_t id,
+ 	uint32_t bufq_handle, struct msm_isp_buffer **buf_info)
+ {
+@@ -359,6 +376,7 @@ static int msm_isp_get_buf(struct msm_isp_buf_mgr *buf_mgr, uint32_t id,
+ 	}
+ 
+ 	if (!(*buf_info)) {
++		msm_isp_dump_bufq(bufq);
+ 		if (bufq->buf_type == ISP_SHARE_BUF) {
+ 			temp_buf_info = kzalloc(
+ 			   sizeof(struct msm_isp_buffer), GFP_ATOMIC);
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_isp.h b/drivers/media/platform/msm/camera_v2/isp/msm_isp.h
+index fb0362e63d3..7cafbd2c566 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_isp.h
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_isp.h
+@@ -246,6 +246,7 @@ struct msm_vfe_axi_stream {
+ 	uint32_t stream_handle;
+ 	uint32_t request_frame;
+ 	uint8_t buf_divert;
++	uint8_t y_only;
+ 	enum msm_vfe_axi_stream_type stream_type;
+ 
+ 	uint32_t frame_based;
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_isp40.c b/drivers/media/platform/msm/camera_v2/isp/msm_isp40.c
+index ae041ffc157..5f25f098600 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_isp40.c
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_isp40.c
+@@ -588,6 +588,7 @@ static void msm_vfe40_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
+ 	uint32_t comp_mask, comp_mask_index =
+ 		stream_info->comp_mask_index;
+ 	uint32_t irq_mask;
++	uint32_t i;
+ 
+ 	comp_mask = msm_camera_io_r(vfe_dev->vfe_base + 0x40);
+ 	comp_mask &= ~(0x7F << (comp_mask_index * 8));
+@@ -599,6 +600,11 @@ static void msm_vfe40_axi_cfg_comp_mask(struct vfe_device *vfe_dev,
+ 	msm_camera_io_w(comp_mask, vfe_dev->vfe_base + 0x40);
+ 
+ 	irq_mask = msm_camera_io_r(vfe_dev->vfe_base + 0x28);
++	/* The composite group owns this stream's completion.  Clear any
++	 * stale per-WM IRQ enables (notably the half-height CBCR WM) so it
++	 * cannot flood the ISP tasklet queue. */
++	for (i = 0; i < stream_info->num_planes; i++)
++		irq_mask &= ~(1 << (stream_info->wm[i] + 8));
+ 	irq_mask |= 1 << (comp_mask_index + 25);
+ 	if (stream_info->plane_cfg[0].plane_addr_offset && (comp_mask >> 24))
+ 		irq_mask |= BIT(28);
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c b/drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c
+index fee13e9f11e..d80bc32f458 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_isp_axi_util.c
+@@ -14,6 +14,18 @@
+ #include "msm_isp_util.h"
+ #include "msm_isp_axi_util.h"
+ 
++/*
++ * The buffer the ISP has just written and handed to the CPP, so that
++ * the CPP driver can be pointed at the frame that exists instead of at
++ * the one userspace guessed.  Read in msm_cpp.c.
++ */
++int msm_isp_last_divert_idx = -1;
++uint32_t msm_isp_last_divert_session;
++uint32_t msm_isp_last_divert_stream;
++EXPORT_SYMBOL(msm_isp_last_divert_idx);
++EXPORT_SYMBOL(msm_isp_last_divert_session);
++EXPORT_SYMBOL(msm_isp_last_divert_stream);
++
+ #define SRC_TO_INTF(src) \
+ 	((src < RDI_INTF_0) ? VFE_PIX_0 : \
+ 	(VFE_RAW_0 + src - RDI_INTF_0))
+@@ -148,6 +160,7 @@ int msm_isp_validate_axi_request(struct msm_vfe_axi_shared_data *axi_data,
+ 	stream_info->output_format = stream_cfg_cmd->output_format;
+ 	stream_info->stream_src = stream_cfg_cmd->stream_src;
+ 	stream_info->frame_based = stream_cfg_cmd->frame_base;
++	stream_info->y_only = stream_cfg_cmd->y_only;
+ 	return 0;
+ }
+ 
+@@ -250,8 +263,11 @@ void msm_isp_axi_reserve_comp_mask(
+ {
+ 	int i;
+ 	uint8_t comp_mask = 0;
+-	for (i = 0; i < stream_info->num_planes; i++)
++	for (i = 0; i < stream_info->num_planes; i++) {
++		if (stream_info->y_only && i > 0)
++			continue;
+ 		comp_mask |= 1 << stream_info->wm[i];
++	}
+ 
+ 	for (i = 0; i < axi_data->hw_info->num_comp_mask; i++) {
+ 		if (!axi_data->composite_info[i].stream_handle) {
+@@ -702,8 +718,9 @@ static void msm_isp_get_done_buf(struct vfe_device *vfe_dev,
+ 	struct msm_isp_buffer **done_buf)
+ {
+ 	uint32_t pingpong_bit = 0, i;
++	int planes = stream_info->y_only ? 1 : stream_info->num_planes;
+ 	pingpong_bit = (~(pingpong_status >> stream_info->wm[0]) & 0x1);
+-	for (i = 0; i < stream_info->num_planes; i++) {
++	for (i = 0; i < planes; i++) {
+ 		if (pingpong_bit !=
+ 			(~(pingpong_status >> stream_info->wm[i]) & 0x1)) {
+ 			pr_warn("%s: Write master ping pong mismatch. Status: 0x%x\n",
+@@ -782,6 +799,85 @@ static void msm_isp_process_frame_drop(struct vfe_device *vfe_dev,
+ 	msm_isp_send_event(vfe_dev, ISP_EVENT_FRAME_DROP, &buf_event);
+ }
+ 
++/*
++ * The buffer the ISP has just written is read by the CPP a few
++ * milliseconds later, so it cannot go back into the pool straight
++ * away: keep it until the next frame of the same stream is done, and
++ * release it then.
++ *
++ * Without this the buffer is not released at all.  This stack does
++ * not use the ISP's shared-buffer accounting -- the CPP has a buffer
++ * manager of its own, and nothing ever puts the ISP's buffer back --
++ * so every frame leaks one buffer.  The pool drains after a few
++ * frames, the ISP stops getting buffers, the frames stop and the
++ * stream stalls.
++ */
++/*
++ * How many frames a written buffer is kept out of the pool.
++ *
++ * The CPP is driven by userspace, which takes a copy of the frame,
++ * demosaics and downscales it: on this device that is over a hundred
++ * milliseconds, three or four ISP frames.  Holding the buffer for a
++ * single frame gave it back while the CPP was still reading it, and
++ * the picture blinked to a half-written frame every other frame.
++ */
++#define MSM_ISP_HOLD_FRAMES 2
++
++static int msm_isp_held_buf[MAX_NUM_STREAM][MSM_ISP_HOLD_FRAMES];
++static int msm_isp_held_next[MAX_NUM_STREAM];
++
++static void msm_isp_held_init(int stream_idx)
++{
++	int i;
++
++	for (i = 0; i < MSM_ISP_HOLD_FRAMES; i++)
++		msm_isp_held_buf[stream_idx][i] = -1;
++	msm_isp_held_next[stream_idx] = 0;
++}
++
++/* Give every held buffer back: the stream is going away. */
++static void msm_isp_release_held_buf(struct vfe_device *vfe_dev,
++	int stream_idx, struct msm_vfe_axi_stream *stream_info)
++{
++	int i;
++
++	for (i = 0; i < MSM_ISP_HOLD_FRAMES; i++) {
++		int held = msm_isp_held_buf[stream_idx][i];
++
++		if (held < 0)
++			continue;
++		msm_isp_held_buf[stream_idx][i] = -1;
++		vfe_dev->buf_mgr->ops->put_buf(vfe_dev->buf_mgr,
++			stream_info->bufq_handle, held);
++	}
++}
++
++/*
++ * Keep the buffer the ISP has just written for a while, and release
++ * the one written MSM_ISP_HOLD_FRAMES frames ago.
++ *
++ * The buffer must not go back into the pool straight away: the CPP,
++ * driven by userspace, reads it tens of milliseconds later.  It must
++ * not stay there for good either: nothing else in this stack ever
++ * gives the ISP's buffer back, so every frame would leak one and the
++ * pool would drain after a few frames -- the ISP would stop getting
++ * buffers, the frames would stop and the stream would stall.
++ */
++static void msm_isp_hold_buf(struct vfe_device *vfe_dev, int stream_idx,
++	struct msm_vfe_axi_stream *stream_info, int buf_idx)
++{
++	int slot = msm_isp_held_next[stream_idx];
++	int held = msm_isp_held_buf[stream_idx][slot];
++
++	if (held >= 0) {
++		msm_isp_held_buf[stream_idx][slot] = -1;
++		vfe_dev->buf_mgr->ops->put_buf(vfe_dev->buf_mgr,
++			stream_info->bufq_handle, held);
++	}
++	msm_isp_held_buf[stream_idx][slot] = buf_idx;
++	msm_isp_held_next[stream_idx] = (slot + 1) % MSM_ISP_HOLD_FRAMES;
++}
++
+ static void msm_isp_process_done_buf(struct vfe_device *vfe_dev,
+ 	struct msm_vfe_axi_stream *stream_info, struct msm_isp_buffer *buf,
+ 	struct msm_isp_timestamp *ts)
+@@ -789,8 +885,8 @@ static void msm_isp_process_done_buf(struct vfe_device *vfe_dev,
+ 	int rc;
+ 	struct msm_isp_event_data buf_event;
+ 	uint32_t stream_idx = HANDLE_TO_IDX(stream_info->stream_handle);
+-	uint32_t buf_src;
+ 	uint32_t frame_id;
++	int buf_src;
+ 
+ 	if (stream_idx >= MAX_NUM_STREAM) {
+ 		pr_err("%s: Invalid stream_idx", __func__);
+@@ -803,8 +899,32 @@ static void msm_isp_process_done_buf(struct vfe_device *vfe_dev,
+ 	if (buf && ts) {
+ 		rc = vfe_dev->buf_mgr->ops->get_buf_src(vfe_dev->buf_mgr,
+ 						buf->bufq_handle, &buf_src);
++		if ((frame_id % 50) == 0) {
++			static int done_n;
++
++			if ((++done_n % 20) == 0)
++				pr_info("%s: frame %u buf %d divert %d src %d\n",
++					__func__, frame_id, buf->buf_idx,
++					stream_info->buf_divert, buf_src);
++		}
+ 		if (stream_info->buf_divert && rc == 0 &&
+ 				buf_src != MSM_ISP_BUFFER_SRC_SCRATCH) {
++			/*
++			 * Remember which buffer this frame was written
++			 * into.  The CPP is told by userspace which
++			 * buffer to read, and userspace cannot know:
++			 * the ISP and the CPP take their buffers from
++			 * the same pool, so the order userspace sees is
++			 * not the order the ISP used.  When the guess
++			 * lands on a buffer that holds nothing the CPP
++			 * copies emptiness -- the blank frame that
++			 * blinks in the preview -- and the ring drifts
++			 * for seconds before it comes back into step.
++			 * The CPP driver reads this instead.
++			 */
++			msm_isp_last_divert_session = stream_info->session_id;
++			msm_isp_last_divert_stream = stream_info->stream_id;
++			msm_isp_last_divert_idx = buf->buf_idx;
+ 			rc = vfe_dev->buf_mgr->ops->buf_divert(vfe_dev->buf_mgr,
+ 				buf->bufq_handle, buf->buf_idx,
+ 				&ts->buf_time, frame_id);
+@@ -826,10 +946,33 @@ static void msm_isp_process_done_buf(struct vfe_device *vfe_dev,
+ 					ISP_EVENT_BUF_DIVERT + stream_idx,
+ 					&buf_event);
+ 			}
++			/*
++			 * The frame is on its way to the CPP, which
++			 * reads the buffer we have just written.
++			 * Hold it until the next frame of this stream
++			 * is done -- by then the CPP has read it -- and
++			 * give it back then.
++			 */
++			msm_isp_hold_buf(vfe_dev, stream_idx,
++				stream_info, buf->buf_idx);
+ 		} else {
+-			vfe_dev->buf_mgr->ops->buf_done(vfe_dev->buf_mgr,
++			rc = vfe_dev->buf_mgr->ops->buf_done(vfe_dev->buf_mgr,
+ 				buf->bufq_handle, buf->buf_idx,
+ 				&ts->buf_time, frame_id);
++			if (rc != 0) {
++				/*
++				 * The frame was not handed over: the
++				 * shared-buffer accounting wants a
++				 * second put, and in this stack
++				 * nothing ever gives one (the CPP has
++				 * a buffer manager of its own and
++				 * never touches the ISP's buffers).
++				 * Without this the buffer is lost and
++				 * the pool drains after a few frames.
++				 */
++				msm_isp_hold_buf(vfe_dev, stream_idx,
++					stream_info, buf->buf_idx);
++			}
+ 		}
+ 	}
+ }
+@@ -1086,6 +1229,9 @@ static int msm_isp_start_axi_stream(struct vfe_device *vfe_dev,
+  		}
+ 		stream_info = &axi_data->stream_info[
+ 			HANDLE_TO_IDX(stream_cfg_cmd->stream_handle[i])];
++		/* No buffer is held over from a previous run. */
++		msm_isp_held_init(HANDLE_TO_IDX(
++			stream_cfg_cmd->stream_handle[i]));
+ 		src_state = axi_data->src_info[
+ 			SRC_TO_INTF(stream_info->stream_src)].active;
+ 
+@@ -1148,6 +1294,10 @@ static int msm_isp_stop_axi_stream(struct vfe_device *vfe_dev,
+ 		stream_info = &axi_data->stream_info[
+ 		     HANDLE_TO_IDX(stream_cfg_cmd->stream_handle[i])];
+ 
++		/* Give the buffer held over from the last frame back. */
++		msm_isp_release_held_buf(vfe_dev,
++			HANDLE_TO_IDX(stream_cfg_cmd->stream_handle[i]),
++			stream_info);
+ 
+ 		stream_info->state = STOP_PENDING;
+ 		if (stream_info->stream_type == BURST_STREAM &&
+@@ -1369,6 +1519,11 @@ void msm_isp_process_axi_irq(struct vfe_device *vfe_dev,
+ 			}
+ 		}
+ 		wm_mask &= ~(comp_info->stream_composite_mask);
++		if (stream_info->y_only) {
++			int plane;
++			for (plane = 1; plane < stream_info->num_planes; plane++)
++				wm_mask &= ~(1 << stream_info->wm[plane]);
++		}
+ 	}
+ 
+ 	for (i = 0; i < axi_data->hw_info->num_wm; i++) {
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_isp_stats_util.c b/drivers/media/platform/msm/camera_v2/isp/msm_isp_stats_util.c
+index 56b0da1290d..9008362fce0 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_isp_stats_util.c
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_isp_stats_util.c
+@@ -78,6 +78,15 @@ void msm_isp_process_stats_irq(struct vfe_device *vfe_dev,
+ 	uint32_t pingpong_status;
+ 	uint32_t comp_stats_type_mask = 0;
+ 	uint32_t stats_comp_mask = 0, stats_irq_mask = 0;
++	/* The CAMIF_RAW path never requests stats streams.  If the stats IRQ
++	 * still fires after a CPP timeout, do not run the stats machinery on
++	 * an unconfigured/expired stream. */
++	if (!vfe_dev || !vfe_dev->hw_info ||
++	    !vfe_dev->hw_info->stats_hw_info)
++		return;
++	if (!vfe_dev->hw_info->vfe_ops.stats_ops.get_comp_mask ||
++	    !vfe_dev->hw_info->vfe_ops.stats_ops.get_wm_mask)
++		return;
+ 	stats_comp_mask = vfe_dev->hw_info->vfe_ops.stats_ops.
+ 		get_comp_mask(irq_status0, irq_status1);
+ 	stats_irq_mask = vfe_dev->hw_info->vfe_ops.stats_ops.
+diff --git a/drivers/media/platform/msm/camera_v2/isp/msm_isp_util.c b/drivers/media/platform/msm/camera_v2/isp/msm_isp_util.c
+index deea9d35a77..8c85c167bdc 100644
+--- a/drivers/media/platform/msm/camera_v2/isp/msm_isp_util.c
++++ b/drivers/media/platform/msm/camera_v2/isp/msm_isp_util.c
+@@ -462,10 +462,25 @@ static int msm_isp_send_hw_cmd(struct vfe_device *vfe_dev,
+ 	case VFE_READ_DMI_64BIT: {
+ 		if (reg_cfg_cmd->cmd_type == VFE_WRITE_DMI_64BIT ||
+ 			reg_cfg_cmd->cmd_type == VFE_READ_DMI_64BIT) {
+-			if ((reg_cfg_cmd->u.dmi_info.hi_tbl_offset <=
+-				reg_cfg_cmd->u.dmi_info.lo_tbl_offset) ||
+-				(reg_cfg_cmd->u.dmi_info.hi_tbl_offset -
+-				reg_cfg_cmd->u.dmi_info.lo_tbl_offset !=
++			/*
++			 * The camera2 HAL puts the *low* half of a 64-bit DMI
++			 * entry after the high half (lo = hi + 4), which is
++			 * the opposite of what this check insists on.  With
++			 * the check as it was, the vendor's own configuration
++			 * was rejected with EINVAL ("hi %d lo %d") and the
++			 * ISP never got its tables -- the camera could be
++			 * opened, configured and streamed, but no frame ever
++			 * came out of it.
++			 *
++			 * Accept either order.  (The table the HAL sends
++			 * here is all zeros, so which half is which does
++			 * not matter for it.)
++			 */
++			if ((reg_cfg_cmd->u.dmi_info.hi_tbl_offset !=
++				reg_cfg_cmd->u.dmi_info.lo_tbl_offset +
++				(sizeof(uint32_t))) &&
++			    (reg_cfg_cmd->u.dmi_info.lo_tbl_offset !=
++				reg_cfg_cmd->u.dmi_info.hi_tbl_offset +
+ 				(sizeof(uint32_t)))) {
+ 				pr_err("%s:%d hi %d lo %d\n",
+ 					__func__, __LINE__,
+@@ -694,6 +709,32 @@ int msm_isp_proc_cmd(struct vfe_device *vfe_dev, void *arg)
+ 		msm_isp_send_hw_cmd(vfe_dev, &reg_cfg_cmd[i],
+ 			cfg_data, proc_cmd->cmd_len);
+ 
++	/* The vendor's VFE register program can re-enable the CBCR WM IRQ
++	 * after the stream was configured.  For a luma-only stream, restore
++	 * the composite mask/IRQ state after every upload so the half-height
++	 * CBCR WM cannot flood the tasklet queue. */
++	for (i = 0; i < MAX_NUM_STREAM; i++) {
++		struct msm_vfe_axi_stream *stream =
++			&vfe_dev->axi_data.stream_info[i];
++		if (stream->y_only &&
++		    (stream->state == STARTING || stream->state == ACTIVE)) {
++			uint32_t irq_mask1;
++			if (vfe_dev->hw_info->vfe_ops.axi_ops.cfg_comp_mask)
++				vfe_dev->hw_info->vfe_ops.axi_ops.cfg_comp_mask(
++					vfe_dev, stream);
++			/* The CAMIF status word on this path reports the
++			 * active width (0x660) continuously and its error IRQ
++			 * floods the tasklet queue.  SOF/EOF and the CAMIF
++			 * violation path are separate; mask only CAMIF error
++			 * bit 0 for the luma-only stream. */
++			irq_mask1 = msm_camera_io_r(
++				vfe_dev->vfe_base + 0x2C);
++			irq_mask1 &= ~1;
++			msm_camera_io_w(irq_mask1,
++				vfe_dev->vfe_base + 0x2C);
++		}
++	}
++
+ 	if (copy_to_user(proc_cmd->cfg_data,
+ 			cfg_data, proc_cmd->cmd_len)) {
+ 		rc = -EFAULT;
+diff --git a/drivers/media/platform/msm/camera_v2/msm_vb2/msm_vb2.c b/drivers/media/platform/msm/camera_v2/msm_vb2/msm_vb2.c
+index 8fa8f8d4808..14fe5f9b764 100644
+--- a/drivers/media/platform/msm/camera_v2/msm_vb2/msm_vb2.c
++++ b/drivers/media/platform/msm/camera_v2/msm_vb2/msm_vb2.c
+@@ -180,6 +180,66 @@ static struct vb2_queue *msm_vb2_get_queue(int session_id,
+ 	return msm_get_stream_vb2q(session_id, stream_id);
+ }
+ 
++/*
++ * A diagnostic: the buffer pool is handed out here and given back
++ * in msm_vb2_put_buf() and msm_vb2_buf_done().  A buffer that is
++ * handed out and never given back is leaked, and when the pool runs
++ * dry the stream stops.  Count every hand-out and hand-back per
++ * buffer index so the leak is visible in the log.
++ */
++#define MSM_VB2_TRACE_MAX 16
++static int msm_vb2_trace_get[MSM_VB2_TRACE_MAX];
++static int msm_vb2_trace_put[MSM_VB2_TRACE_MAX];
++static int msm_vb2_trace_done[MSM_VB2_TRACE_MAX];
++
++static void msm_vb2_trace(int idx, int which)
++{
++	if (idx < 0 || idx >= MSM_VB2_TRACE_MAX)
++		return;
++	if (which == 0)
++		msm_vb2_trace_get[idx]++;
++	else if (which == 1)
++		msm_vb2_trace_put[idx]++;
++	else
++		msm_vb2_trace_done[idx]++;
++}
++
++static void msm_vb2_dump_pool(struct msm_stream *stream,
++	int session_id, int stream_id)
++{
++	struct msm_vb2_buffer *msm_vb2;
++	int i;
++	static unsigned long last_dump;
++
++	/* The pool runs dry often; do not drown the log. */
++	{
++		unsigned long now = jiffies;
++
++		if (now - last_dump < HZ)
++			return;
++		last_dump = now;
++	}
++
++	pr_err("%s: no free buffer (session %d stream %d)\n",
++		__func__, session_id, stream_id);
++	list_for_each_entry(msm_vb2, &(stream->queued_list), list) {
++		pr_err("%s:   buf %d: state %d in_freeq %d get %d put %d done %d\n",
++			__func__,
++			msm_vb2->vb2_buf.v4l2_buf.index,
++			msm_vb2->vb2_buf.state,
++			msm_vb2->in_freeq,
++			msm_vb2_trace_get[msm_vb2->vb2_buf.v4l2_buf.index],
++			msm_vb2_trace_put[msm_vb2->vb2_buf.v4l2_buf.index],
++			msm_vb2_trace_done[msm_vb2->vb2_buf.v4l2_buf.index]);
++	}
++	for (i = 0; i < MSM_VB2_TRACE_MAX; i++)
++		if (msm_vb2_trace_get[i] || msm_vb2_trace_put[i] ||
++		    msm_vb2_trace_done[i])
++			pr_err("%s:   idx %d: get %d put %d done %d\n",
++				__func__, i, msm_vb2_trace_get[i],
++				msm_vb2_trace_put[i], msm_vb2_trace_done[i]);
++}
++
+ static struct vb2_buffer *msm_vb2_get_buf(int session_id,
+ 	unsigned int stream_id)
+ {
+@@ -208,8 +268,10 @@ static struct vb2_buffer *msm_vb2_get_buf(int session_id,
+ 			continue;
+ 
+ 		msm_vb2->in_freeq = 1;
++		msm_vb2_trace(vb2_buf->v4l2_buf.index, 0);
+ 		goto end;
+ 	}
++	msm_vb2_dump_pool(stream, session_id, stream_id);
+ 	msm_vb2 = NULL;
+ 	vb2_buf = NULL;
+ end:
+@@ -234,6 +296,7 @@ static int msm_vb2_put_buf(struct vb2_buffer *vb, int session_id,
+ 			container_of(vb, struct msm_vb2_buffer, vb2_buf);
+ 		if (msm_vb2->in_freeq) {
+ 			msm_vb2->in_freeq = 0;
++			msm_vb2_trace(msm_vb2->vb2_buf.v4l2_buf.index, 1);
+ 			rc = 0;
+ 		} else
+ 			rc = -EINVAL;
+@@ -264,6 +327,7 @@ static int msm_vb2_buf_done(struct vb2_buffer *vb, int session_id,
+ 		if (msm_vb2->in_freeq) {
+ 			vb2_buffer_done(vb, VB2_BUF_STATE_DONE);
+ 			msm_vb2->in_freeq = 0;
++			msm_vb2_trace(msm_vb2->vb2_buf.v4l2_buf.index, 2);
+ 			rc = 0;
+ 		} else
+ 			rc = -EINVAL;
+diff --git a/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c b/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
+index a0ddc42459e..df7d4326214 100644
+--- a/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
++++ b/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
+@@ -16,9 +16,14 @@
+ #include <linux/delay.h>
+ #include <linux/clk.h>
+ #include <linux/firmware.h>
++#include <linux/fs.h>
++#include <linux/fcntl.h>
++#include <linux/vmalloc.h>
+ #include <linux/io.h>
+ #include <linux/of.h>
+ #include <linux/module.h>
++#include <linux/cred.h>
++#include <linux/init_task.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/ion.h>
+ #include <linux/proc_fs.h>
+@@ -81,7 +86,7 @@ static int del_timer_idx;
+ static int set_timer_idx;
+ 
+ /* dump the frame command before writing to the hardware */
+-#define  MSM_CPP_DUMP_FRM_CMD 1
++#define  MSM_CPP_DUMP_FRM_CMD 0
+ 
+ #if CONFIG_MSM_CPP_DBG
+ #define CPP_DBG(fmt, args...) pr_err(fmt, ##args)
+@@ -763,6 +768,71 @@ static void cpp_release_hardware(struct cpp_device *cpp_dev)
+ 	msm_isp_deinit_bandwidth_mgr(ISP_CPP);
+ }
+ 
++/*
++ * cpp_read_fw_file - read the camera's firmware blob from /lib/firmware
++ * @name: the file name (a path is accepted; only the base name is used)
++ *
++ * request_firmware() asks the user space helper for the blob, and the
++ * helper answers it from the device tree firmware region.  Under a
++ * recovery ramdisk there is no such region, so the blob that *is* in
++ * /lib/firmware is not found, and the CPP never starts ("Invalid frame
++ * message", and no frame ever arrives).  So read the file here.
++ */
++#define CPP_FW_MAX_SIZE	(64 * 1024)
++
++static void *cpp_read_fw_file(const char *name, size_t *size)
++{
++	struct file *filp;
++	const char *base;
++	char path[80];
++	void *buf;
++	loff_t pos = 0;
++	ssize_t got;
++
++	base = strrchr(name, '/');
++	base = base ? base + 1 : name;
++	if (!base || !*base)
++		return NULL;
++
++	snprintf(path, sizeof(path), "/lib/firmware/%s", base);
++
++	filp = filp_open(path, O_RDONLY, 0);
++	if (IS_ERR(filp)) {
++		pr_err("%s: cannot open %s (%ld)\n", __func__, path,
++			(long)PTR_ERR(filp));
++		return NULL;
++	}
++
++	/* the size: the blob is 16 KB, so give it room for the whole
++	 * thing (a page would truncate it) */
++	buf = vmalloc(CPP_FW_MAX_SIZE);
++	if (!buf) {
++		filp_close(filp, NULL);
++		return NULL;
++	}
++
++	while (pos < CPP_FW_MAX_SIZE) {
++		got = kernel_read(filp, pos, (char *)buf + pos,
++				  CPP_FW_MAX_SIZE - pos);
++		if (got <= 0)
++			break;
++		pos += got;
++	}
++	filp_close(filp, NULL);
++
++	if (!pos) {
++		vfree(buf);
++		return NULL;
++	}
++
++	*size = pos;
++	/* %u, not %zu: the kernel's vsnprintf does not know %zu and
++	 * reads the number as a string pointer (which faults). */
++	pr_err("%s: read %s (%u bytes) from %s\n", __func__, base,
++		(unsigned int)pos, path);
++	return buf;
++}
++
+ static void cpp_load_fw(struct cpp_device *cpp_dev, char *fw_name_bin)
+ {
+ 	uint32_t i;
+@@ -770,6 +840,8 @@ static void cpp_load_fw(struct cpp_device *cpp_dev, char *fw_name_bin)
+ 	int32_t rc = -EFAULT;
+ 	const struct firmware *fw = NULL;
+ 	struct device *dev = &cpp_dev->pdev->dev;
++	void *own_buf = NULL;
++	size_t fw_size = 0;
+ 
+ 	msm_camera_io_w(0x1, cpp_dev->base + MSM_CPP_MICRO_CLKEN_CTL);
+ 	msm_camera_io_w(0x1, cpp_dev->base +
+@@ -784,8 +856,31 @@ static void cpp_load_fw(struct cpp_device *cpp_dev, char *fw_name_bin)
+ 				"Fail to loc blob %s from dev %pK, Error: %d\n",
+ 				fw_name_bin, dev, rc);
+ 		}
+-		if (NULL != fw)
++		/* The blob has to be there: the code below dereferences fw
++		 * unconditionally, so a failed request_firmware() used to
++		 * oops the kernel here (the CALL_TRACE was
++		 * msm_camera_io_w+0x0, i.e. the NULL read of fw->size). */
++		if (fw == NULL) {
++			/* request_firmware() hands the request to the user
++			 * space helper, and the helper is not always
++			 * able to answer it: the recovery's ueventd
++			 * only knows the device tree firmware region,
++			 * so under a recovery ramdisk the blob in
++			 * /lib/firmware is not found at all.  Read it
++			 * here instead -- the file is right there. */
++			size_t own_size = 0;
++
++			own_buf = cpp_read_fw_file(fw_name_bin, &own_size);
++			if (own_buf == NULL) {
++				dev_err(dev, "no firmware, giving up\n");
++				return;
++			}
++			ptr_bin = (uint32_t *)own_buf;
++			fw_size = own_size;
++		} else {
+ 			ptr_bin = (uint32_t *)fw->data;
++			fw_size = fw->size;
++		}
+ 
+ 		msm_camera_io_w(0x1, cpp_dev->base +
+ 					 MSM_CPP_MICRO_BOOT_START);
+@@ -795,17 +890,19 @@ static void cpp_load_fw(struct cpp_device *cpp_dev, char *fw_name_bin)
+ 
+ 		/*Start firmware loading*/
+ 		msm_cpp_write(MSM_CPP_CMD_FW_LOAD, cpp_dev->base);
+-		msm_cpp_write(fw->size, cpp_dev->base);
++		msm_cpp_write(fw_size, cpp_dev->base);
+ 		msm_cpp_write(MSM_CPP_START_ADDRESS, cpp_dev->base);
+ 
+ 		if (ptr_bin) {
+-			for (i = 0; i < fw->size/4; i++) {
++			for (i = 0; i < fw_size/4; i++) {
+ 				msm_cpp_write(*ptr_bin, cpp_dev->base);
+ 				ptr_bin++;
+ 			}
+ 		}
+ 		if (fw)
+ 			release_firmware(fw);
++		else
++			vfree(own_buf);
+ 		msm_cpp_poll(cpp_dev->base, MSM_CPP_MSG_ID_OK);
+ 		msm_cpp_poll(cpp_dev->base, MSM_CPP_MSG_ID_CMD);
+ 	}
+@@ -977,6 +1074,16 @@ static int msm_cpp_notify_frame_done(struct cpp_device *cpp_dev)
+ 	if (queue->len > 0) {
+ 		frame_qcmd = msm_dequeue(queue, list_frame);
+ 		processed_frame = frame_qcmd->command;
++		if (processed_frame->frame_id % 50 == 0) {
++			static int done_n;
++
++			/* The frame id is not always set, so count. */
++			if ((++done_n % 100) == 0)
++				pr_info("%s: frame %d in %u out %u\n",
++					__func__, processed_frame->frame_id,
++					processed_frame->input_buffer_info.index,
++					processed_frame->output_buffer_info[0].index);
++		}
+ 		do_gettimeofday(&(processed_frame->out_time));
+ 		kfree(frame_qcmd);
+ 		event_qcmd = kzalloc(sizeof(struct msm_queue_cmd), GFP_ATOMIC);
+@@ -1055,11 +1162,14 @@ static int msm_cpp_dump_frame_cmd(uint32_t *cmd, int32_t len)
+ 
+ void msm_cpp_do_timeout_work(struct work_struct *work)
+ {
+-	int ret;
+-	uint32_t i = 0;
+ 	struct msm_cpp_frame_info_t *this_frame =
+ 		cpp_timers[del_timer_idx].data.processed_frame;
+ 	struct msm_cpp_frame_info_t *second_frame = NULL;
++	/* The device whose timer expired.  The index juggling below moves
++	 * del_timer_idx, and reading cpp_dev from the (then different)
++	 * slot afterwards reloads the firmware on a device that may
++	 * never have been initialised -- a NULL base, and an oops. */
++	struct cpp_device *expired_dev = cpp_timers[del_timer_idx].data.cpp_dev;
+ 
+ 	pr_err("cpp_timer_callback called idx:%d. (jiffies=%lu)\n",
+ 		del_timer_idx, jiffies);
+@@ -1078,64 +1188,30 @@ void msm_cpp_do_timeout_work(struct work_struct *work)
+ 		del_timer_idx = 1 - del_timer_idx;
+ 	}
+ 
+-	disable_irq(cpp_timers[del_timer_idx].data.cpp_dev->irq->start);
+-	pr_err("Reloading firmware\n");
+-	cpp_load_fw(cpp_timers[del_timer_idx].data.cpp_dev, NULL);
+-	pr_err("Firmware loading done\n");
+-	enable_irq(cpp_timers[del_timer_idx].data.cpp_dev->irq->start);
+-	msm_camera_io_w_mb(0x8, cpp_timers[del_timer_idx].data.cpp_dev->base +
+-		MSM_CPP_MICRO_IRQGEN_MASK);
+-	msm_camera_io_w_mb(0xFFFF,
+-		cpp_timers[del_timer_idx].data.cpp_dev->base +
+-		MSM_CPP_MICRO_IRQGEN_CLR);
+-
+-	cpp_timers[set_timer_idx].data.processed_frame = this_frame;
+-	cpp_timers[set_timer_idx].used = 1;
+-	pr_err("ReInstalling cpp_timer %d\n", set_timer_idx);
+-	setup_timer(&cpp_timers[set_timer_idx].cpp_timer, cpp_timer_callback,
+-		(unsigned long)&cpp_timers[0]);
+-	pr_err("Starting timer to fire in %d ms. (jiffies=%lu)\n",
+-		CPP_CMD_TIMEOUT_MS, jiffies);
+-	ret = mod_timer(&cpp_timers[set_timer_idx].cpp_timer,
+-		jiffies + msecs_to_jiffies(CPP_CMD_TIMEOUT_MS));
+-	if (ret)
+-		pr_err("error in mod_timer\n");
+-
+-	set_timer_idx = 1 - set_timer_idx;
+-	pr_err("Rescheduling for identity=0x%x, frame_id=%03d",
+-		this_frame->identity, this_frame->frame_id);
+-	msm_cpp_write(0x6, cpp_timers[set_timer_idx].data.cpp_dev->base);
+-	msm_cpp_dump_frame_cmd(this_frame->cpp_cmd_msg,
+-		this_frame->msg_len);
+-	for (i = 0; i < this_frame->msg_len; i++)
+-		msm_cpp_write(this_frame->cpp_cmd_msg[i],
+-			cpp_timers[set_timer_idx].data.cpp_dev->base);
+-
+-
+-	if (second_frame != NULL) {
+-		cpp_timers[set_timer_idx].data.processed_frame = second_frame;
+-		cpp_timers[set_timer_idx].used = 1;
+-		pr_err("ReInstalling cpp_timer %d\n", set_timer_idx);
+-		setup_timer(&cpp_timers[set_timer_idx].cpp_timer,
+-			cpp_timer_callback, (unsigned long)&cpp_timers[0]);
+-		pr_err("Starting timer to fire in %d ms. (jiffies=%lu)\n",
+-			CPP_CMD_TIMEOUT_MS, jiffies);
+-		ret = mod_timer(&cpp_timers[set_timer_idx].cpp_timer,
+-			jiffies + msecs_to_jiffies(CPP_CMD_TIMEOUT_MS));
+-		if (ret)
+-			pr_err("error in mod_timer\n");
+-
+-		set_timer_idx = 1 - set_timer_idx;
+-		pr_err("Rescheduling for identity=0x%x, frame_id=%03d",
+-			second_frame->identity, second_frame->frame_id);
+-		msm_cpp_write(0x6,
+-			cpp_timers[set_timer_idx].data.cpp_dev->base);
+-		msm_cpp_dump_frame_cmd(second_frame->cpp_cmd_msg,
+-			second_frame->msg_len);
+-		for (i = 0; i < second_frame->msg_len; i++)
+-			msm_cpp_write(second_frame->cpp_cmd_msg[i],
+-				cpp_timers[set_timer_idx].data.cpp_dev->base);
+-	}
++	if (expired_dev == NULL || expired_dev->base == NULL) {
++		/* Nothing to reload: the node is gone. */
++		pr_err("no CPP device to reload the firmware into\n");
++		return;
++	}
++
++	/* The vendor recovers from an expired frame by reloading the
++	 * firmware into the CPP and starting again.  That path writes
++	 * to the CPP's registers from a workqueue, and on this device
++	 * the write aborts (the region is not accessible from there),
++	 * which takes the whole kernel down.  The frame is already
++	 * lost by then, so the reload buys nothing here: log it and
++	 * leave the hardware alone. */
++	pr_err("the frame timed out; dropping it (no hardware reload)\n");
++	/*
++	 * The vendor reload/resend path writes to the CPP from this workqueue.
++	 * On this device that write is not accessible from the workqueue and
++	 * takes the whole kernel down (the panic lands in
++	 * msm_isp_process_stats_irq).  The frame is already lost, so do not
++	 * touch the hardware and do not re-arm the timer.  A timed-out frame
++	 * now stalls that frame instead of resetting the device.
++	 */
++	(void)second_frame;
++	return;
+ }
+ 
+ void cpp_timer_callback(unsigned long data)
+@@ -1199,6 +1275,64 @@ static int msm_cpp_flush_frames(struct cpp_device *cpp_dev)
+ {
+ 	return 0;
+ }
++/* Per-frame CPP configuration capture.
++ *
++ * The camera HAL sends one msm_cpp_frame_info_t per frame.  Dumping the
++ * struct (input/output buffer info, identity, strip count) together with
++ * the command words lets userspace reproduce the HAL's sequence exactly
++ * instead of guessing which capture buffer the CPP must read.
++ *
++ * Files land in /data/local/tmp, which adb shell can read, so no root is
++ * needed to collect them.  The number written is capped by
++ * cpp_dump_frames (module parameter, default 64; 0 disables).
++ */
++static int cpp_dump_frames = 64;
++module_param(cpp_dump_frames, int, 0644);
++MODULE_PARM_DESC(cpp_dump_frames, "number of CPP frame configs to dump");
++
++static void cpp_dump_frame(const struct msm_cpp_frame_info_t *u,
++			   const uint32_t *msg)
++{
++	static u32 idx;
++	char path[80];
++	struct file *f;
++	loff_t pos = 0;
++	const struct cred *old;
++	int w;
++
++	if (cpp_dump_frames <= 0 || idx >= (u32)cpp_dump_frames)
++		return;
++
++	snprintf(path, sizeof(path), "/data/local/tmp/cpp_frm_%03u.bin", idx);
++	old = override_creds(&init_cred);
++	f = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++	if (IS_ERR(f)) {
++		pr_err("cpp: dump open %s: %ld\n", path, PTR_ERR(f));
++		revert_creds(old);
++		return;
++	}
++	/* The buffers are kernel memory, so the file layer must not treat
++	 * them as user addresses. */
++	{
++		mm_segment_t old_fs = get_fs();
++		set_fs(KERNEL_DS);
++		w = vfs_write(f, (const char *)u, sizeof(*u), &pos);
++		if (w == sizeof(*u) && msg && u->msg_len)
++			w = vfs_write(f, (const char *)msg,
++				      sizeof(uint32_t) * u->msg_len, &pos);
++		set_fs(old_fs);
++	}
++	filp_close(f, NULL);
++	revert_creds(old);
++
++	pr_info("cpp: dump %s in=%u fd=%d native=%u out0=%u out1=%u id=0x%x strips=%u words=%u\n",
++		path, u->input_buffer_info.index, u->input_buffer_info.fd,
++		u->input_buffer_info.native_buff, u->output_buffer_info[0].index,
++		u->output_buffer_info[1].index, u->identity, u->num_strips,
++		u->msg_len);
++	idx++;
++}
++
+ 
+ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
+ 	struct msm_camera_v4l2_ioctl_t *ioctl_ptr)
+@@ -1260,6 +1394,15 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
+ 		goto ERROR2;
+ 	}
+ 
++	{
++		struct msm_cpp_frame_info_t *snap =
++			kmemdup(new_frame, sizeof(*new_frame), GFP_KERNEL);
++		if (snap) {
++			cpp_dump_frame(snap, cpp_frame_msg);
++			kfree(snap);
++		}
++	}
++
+ 	new_frame->cpp_cmd_msg = cpp_frame_msg;
+ 	if (cpp_frame_msg == NULL ||
+ 		(new_frame->msg_len < MSM_CPP_MIN_FRAME_LENGTH)) {
+@@ -1277,6 +1420,35 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
+ 			new_frame->num_strips);
+ 		return -EINVAL;
+ 	}
++	/*
++	 * Read the frame the ISP has just written, not the buffer
++	 * userspace asked for.  Userspace cannot know which one it is:
++	 * the ISP and the CPP take their buffers from the same pool, so
++	 * the order userspace sees is not the order the ISP used.  A
++	 * wrong guess reads a buffer that holds nothing -- the blank
++	 * frame that blinks in the preview -- and takes seconds to come
++	 * back into step.
++	 */
++	{
++		extern int msm_isp_last_divert_idx;
++		extern uint32_t msm_isp_last_divert_session;
++		extern uint32_t msm_isp_last_divert_stream;
++
++		if (msm_isp_last_divert_idx >= 0 &&
++		    msm_isp_last_divert_session ==
++			((new_frame->identity >> 16) & 0xFFFF) &&
++		    msm_isp_last_divert_stream ==
++			(new_frame->identity & 0xFFFF)) {
++			if (new_frame->input_buffer_info.index !=
++			    (uint32_t)msm_isp_last_divert_idx)
++				pr_debug("%s: input %u -> the ISP's %d\n",
++					 __func__,
++					 new_frame->input_buffer_info.index,
++					 msm_isp_last_divert_idx);
++			new_frame->input_buffer_info.index =
++				(uint32_t)msm_isp_last_divert_idx;
++		}
++	}
+ 	in_phyaddr = msm_cpp_fetch_buffer_info(cpp_dev,
+ 		&new_frame->input_buffer_info,
+ 		((new_frame->identity >> 16) & 0xFFFF),
+@@ -1294,7 +1466,9 @@ static int msm_cpp_cfg(struct cpp_device *cpp_dev,
+ 		&buff_mgr_info);
+ 	if (rc < 0) {
+ 		rc = -EAGAIN;
+-		pr_debug("error getting buffer rc:%d\n", rc);
++		pr_err("error getting buffer rc:%d (session %d stream %d, input buf %d)\n",
++			rc, buff_mgr_info.session_id, buff_mgr_info.stream_id,
++			new_frame->input_buffer_info.index);
+ 		goto ERROR2;
+ 	}
+ 	new_frame->output_buffer_info[0].index = buff_mgr_info.index;
+@@ -1610,6 +1784,13 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
+ 		struct msm_queue_cmd *event_qcmd;
+ 		struct msm_cpp_frame_info_t *process_frame;
+ 		event_qcmd = msm_dequeue(queue, list_eventdata);
++		/* The queue is drained from userspace and may be empty;
++		 * dereferencing the dequeue result without this check
++		 * faults the kernel. */
++		if (!event_qcmd) {
++			rc = -ENODATA;
++			break;
++		}
+ 		process_frame = event_qcmd->command;
+ 		CPP_DBG("fid %d\n", process_frame->frame_id);
+ 		if (copy_to_user((void __user *)ioctl_ptr->ioctl_ptr,
+diff --git a/drivers/media/platform/msm/camera_v2/sensor/actuator/msm_actuator.c b/drivers/media/platform/msm/camera_v2/sensor/actuator/msm_actuator.c
+index 1e34f088dd3..8c9ef995d54 100755
+--- a/drivers/media/platform/msm/camera_v2/sensor/actuator/msm_actuator.c
++++ b/drivers/media/platform/msm/camera_v2/sensor/actuator/msm_actuator.c
+@@ -13,6 +13,9 @@
+ #define pr_fmt(fmt) "%s:%d " fmt, __func__, __LINE__
+ 
+ #include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/cred.h>
++#include <linux/init_task.h>
+ #include <linux/ratelimit.h>
+ #include "msm_sd.h"
+ #include "msm_actuator.h"
+@@ -95,7 +98,9 @@ static void msm_actuator_parse_i2c_params(struct msm_actuator_ctrl_t *a_ctrl,
+ 						i2c_byte1, i2c_byte2);
+ 					if (a_ctrl->i2c_tbl_index >
+ 						a_ctrl->total_steps) {
+-						pr_err("failed:i2c table index out of bound\n");
++						pr_err_ratelimited("failed:i2c table index %u > steps %u\n",
++							a_ctrl->i2c_tbl_index,
++							a_ctrl->total_steps);
+ 						break;
+ 					}
+ 					i2c_tbl[a_ctrl->i2c_tbl_index].
+@@ -477,6 +482,15 @@ static int32_t msm_actuator_init(struct msm_actuator_ctrl_t *a_ctrl,
+ 		return -EFAULT;
+ 	}
+ 
++	pr_err("actuator init: steps=%u region=%u regs=%u data=%u code=%d addr=0x%x at=%u dt=%u\n",
++	       set_info->af_tuning_params.total_steps,
++	       set_info->af_tuning_params.region_size,
++	       set_info->actuator_params.reg_tbl_size,
++	       set_info->actuator_params.data_size,
++	       set_info->af_tuning_params.initial_code,
++	       set_info->actuator_params.i2c_addr,
++	       set_info->actuator_params.i2c_addr_type,
++	       set_info->actuator_params.i2c_data_type);
+ 	a_ctrl->region_size = set_info->af_tuning_params.region_size;
+ 	a_ctrl->pwd_step = set_info->af_tuning_params.pwd_step;
+ 	a_ctrl->total_steps = set_info->af_tuning_params.total_steps;
+@@ -573,6 +587,118 @@ static int32_t msm_actuator_init(struct msm_actuator_ctrl_t *a_ctrl,
+ 	return rc;
+ }
+ 
++/* Capture the vendor HAL's actuator configuration.
++ *
++ * The VCM step table is not in the kernel: the HAL sends it with
++ * CFG_SET_ACTUATOR_INFO.  Dump the whole set_info (scalars plus the
++ * register/tuning/region arrays) so userspace can reproduce autofocus.
++ */
++/* Append one line to /data/local/tmp/actuator_seq.log so the vendor
++ * HAL's call order can be replayed exactly. */
++static void act_log(const char *fmt, ...)
++{
++	struct file *f;
++	loff_t pos = 0;
++	const struct cred *old;
++	mm_segment_t old_fs;
++	char buf[160];
++	va_list ap;
++	int n;
++
++	va_start(ap, fmt);
++	n = vsnprintf(buf, sizeof(buf), fmt, ap);
++	va_end(ap);
++	if (n <= 0)
++		return;
++	if (n > (int)sizeof(buf) - 1)
++		n = sizeof(buf) - 1;
++
++	old = override_creds(&init_cred);
++	f = filp_open("/data/local/tmp/actuator_seq.log",
++		      O_WRONLY | O_CREAT | O_APPEND, 0666);
++	if (IS_ERR(f)) {
++		revert_creds(old);
++		return;
++	}
++	old_fs = get_fs();
++	set_fs(KERNEL_DS);
++	vfs_write(f, buf, n, &pos);
++	set_fs(old_fs);
++	filp_close(f, NULL);
++	revert_creds(old);
++}
++
++static void actuator_dump_set_info(const struct msm_actuator_set_info_t *si)
++{
++	static int done;
++	struct file *f;
++	loff_t pos = 0;
++	const struct cred *old;
++	mm_segment_t old_fs;
++	struct {
++		uint32_t magic;
++		uint32_t reg_tbl_size;
++		uint32_t init_size;
++		uint32_t region_size;
++		uint32_t data_size;
++		uint32_t total_steps;
++		uint32_t initial_code;
++		uint32_t pwd_step;
++		uint32_t i2c_addr;
++		uint32_t addr_type;
++		uint32_t data_type;
++		uint32_t act_type;
++	} hdr;
++	const char *path = "/data/local/tmp/actuator_info.bin";
++
++	if (done || !si)
++		return;
++
++	memset(&hdr, 0, sizeof(hdr));
++	hdr.magic = 0x41435431;	/* "ACT1" */
++	hdr.reg_tbl_size = si->actuator_params.reg_tbl_size;
++	hdr.init_size = si->actuator_params.init_setting_size;
++	hdr.region_size = si->af_tuning_params.region_size;
++	hdr.data_size = si->actuator_params.data_size;
++	hdr.total_steps = si->af_tuning_params.total_steps;
++	hdr.initial_code = (uint32_t)si->af_tuning_params.initial_code;
++	hdr.pwd_step = si->af_tuning_params.pwd_step;
++	hdr.i2c_addr = si->actuator_params.i2c_addr;
++	hdr.addr_type = si->actuator_params.i2c_addr_type;
++	hdr.data_type = si->actuator_params.i2c_data_type;
++	hdr.act_type = si->actuator_params.act_type;
++
++	old = override_creds(&init_cred);
++	f = filp_open(path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
++	if (IS_ERR(f)) {
++		pr_err("actuator: dump open: %ld\n", PTR_ERR(f));
++		revert_creds(old);
++		return;
++	}
++	old_fs = get_fs();
++	set_fs(KERNEL_DS);
++	vfs_write(f, (const char *)&hdr, sizeof(hdr), &pos);
++	if (si->actuator_params.reg_tbl_size && si->actuator_params.reg_tbl_params)
++		vfs_write(f, (const char *)si->actuator_params.reg_tbl_params,
++			  sizeof(*si->actuator_params.reg_tbl_params) *
++			  si->actuator_params.reg_tbl_size, &pos);
++	if (si->actuator_params.init_setting_size && si->actuator_params.init_settings)
++		vfs_write(f, (const char *)si->actuator_params.init_settings,
++			  sizeof(*si->actuator_params.init_settings) *
++			  si->actuator_params.init_setting_size, &pos);
++	if (si->af_tuning_params.region_size && si->af_tuning_params.region_params)
++		vfs_write(f, (const char *)si->af_tuning_params.region_params,
++			  sizeof(*si->af_tuning_params.region_params) *
++			  si->af_tuning_params.region_size, &pos);
++	set_fs(old_fs);
++	filp_close(f, NULL);
++	revert_creds(old);
++	pr_info("actuator: dumped %s regs=%u init=%u regions=%u steps=%u code=%d\n",
++		path, hdr.reg_tbl_size, hdr.init_size, hdr.region_size,
++		hdr.total_steps, si->af_tuning_params.initial_code);
++	done = 1;
++}
++
+ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
+ 	void __user *argp)
+ {
+@@ -582,6 +708,7 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
+ 	mutex_lock(a_ctrl->actuator_mutex);
+ 	CDBG("Enter\n");
+ 	CDBG("%s type %d\n", __func__, cdata->cfgtype);
++	act_log("cfg type=%d\n", cdata->cfgtype);
+ 	switch (cdata->cfgtype) {
+ 	case CFG_GET_ACTUATOR_INFO:
+ 		cdata->is_af_supported = 1;
+@@ -589,12 +716,17 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
+ 		break;
+ 
+ 	case CFG_SET_ACTUATOR_INFO:
++		actuator_dump_set_info(&cdata->cfg.set_info);
+ 		rc = msm_actuator_init(a_ctrl, &cdata->cfg.set_info);
+ 		if (rc < 0)
+ 			pr_err("init table failed %d\n", rc);
+ 		break;
+ 
+ 	case CFG_SET_DEFAULT_FOCUS:
++		act_log("default_focus dir=%d sign=%d dest=%d steps=%d inf=%d\n",
++			cdata->cfg.move.dir, cdata->cfg.move.sign_dir,
++			cdata->cfg.move.dest_step_pos, cdata->cfg.move.num_steps,
++			cdata->cfg.move.num_steps_inf_pos);
+ 		rc = a_ctrl->func_tbl->actuator_set_default_focus(a_ctrl,
+ 			&cdata->cfg.move);
+ 		if (rc < 0)
+@@ -602,6 +734,10 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
+ 		break;
+ 
+ 	case CFG_MOVE_FOCUS:
++		act_log("move dir=%d sign=%d dest=%d steps=%d inf=%d\n",
++			cdata->cfg.move.dir, cdata->cfg.move.sign_dir,
++			cdata->cfg.move.dest_step_pos, cdata->cfg.move.num_steps,
++			cdata->cfg.move.num_steps_inf_pos);
+ 		rc = a_ctrl->func_tbl->actuator_move_focus(a_ctrl,
+ 			&cdata->cfg.move);
+ 		if (rc < 0)
+@@ -665,6 +801,7 @@ static int msm_actuator_open(struct v4l2_subdev *sd,
+ 		pr_err("failed\n");
+ 		return -EINVAL;
+ 	}
++	act_log("open\n");
+ 	if (a_ctrl->act_device_type == MSM_CAMERA_PLATFORM_DEVICE) {
+ 		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_util(
+ 			&a_ctrl->i2c_client, MSM_CCI_INIT);
+@@ -684,6 +821,7 @@ static int msm_actuator_close(struct v4l2_subdev *sd,
+ 		pr_err("failed\n");
+ 		return -EINVAL;
+ 	}
++	act_log("close\n");
+ 	if (a_ctrl->act_device_type == MSM_CAMERA_PLATFORM_DEVICE) {
+ 		rc = a_ctrl->i2c_client.i2c_func_tbl->i2c_util(
+ 			&a_ctrl->i2c_client, MSM_CCI_RELEASE);
+diff --git a/drivers/usb/gadget/android.c b/drivers/usb/gadget/android.c
+index 2d56b7c000f..af2904ec4bb 100644
+--- a/drivers/usb/gadget/android.c
++++ b/drivers/usb/gadget/android.c
+@@ -3497,6 +3497,25 @@ static int __devinit android_probe(struct platform_device *pdev)
+ 
+ 	android_dev->name = pdev->name;
+ 	android_dev->disable_depth = 1;
++
++	/*
++	 * Default the functionfs alias to "adb".
++	 *
++	 * The name written to /sys/class/android_usb/android0/f_ffs/aliases
++	 * decides whether the name "adb" in a configuration string selects the
++	 * userspace functionfs instance (what every modern adbd uses) or the
++	 * legacy in-kernel f_adb function (drivers/usb/gadget/f_adb.c).
++	 *
++	 * The attribute only exists once the gadget has bound to a UDC, so
++	 * userspace that writes it early races with the UDC coming up.  If
++	 * that write is lost, the composite binds the in-kernel adb function:
++	 * the host still enumerates an "ADB Interface", but no userspace adbd
++	 * is attached to it, and adb sits at "offline" forever.
++	 *
++	 * Defaulting the alias removes the race -- the write, when it happens,
++	 * just sets the same value again.
++	 */
++	strlcpy(android_dev->ffs_aliases, "adb", sizeof(android_dev->ffs_aliases));
+ 	android_dev->functions = supported_functions;
+ 	android_dev->configs_num = 0;
+ 	INIT_LIST_HEAD(&android_dev->configs);
+diff --git a/drivers/usb/gadget/f_fs.c b/drivers/usb/gadget/f_fs.c
+index ece5541625b..12928569aea 100644
+--- a/drivers/usb/gadget/f_fs.c
++++ b/drivers/usb/gadget/f_fs.c
+@@ -1002,7 +1002,7 @@ first_try:
+  			if (unlikely(!req))
+  				goto error;
+  			req->buf      = data;
+- 			req->length   = io_data->len;
++ 			req->length   = io_data->read ? buffer_len : io_data->len;
+ 
+ 			io_data->buf = data;
+  			io_data->ep = ep->ep;
+@@ -1022,8 +1022,25 @@ first_try:
+ 		} else {
+ 			DECLARE_COMPLETION_ONSTACK(done);
+  			req = ep->req;
++			/*
++			 * For a read, queue the whole (rounded up) buffer, not just
++			 * the number of bytes the caller asked for.
++			 *
++			 * The DWC3 controller cannot complete a short OUT transfer: a
++			 * request shorter than the endpoint's wMaxPacketSize never
++			 * finishes, so the data the host sent never reaches
++			 * userspace.  adbd reads the 24-byte ADB header with a single
++			 * read(), so queueing io_data->len here stalls the transport
++			 * and adb never gets past "offline": the host sees the ADB
++			 * interface enumerate and then nothing else.
++			 *
++			 * buffer_len is round_up(io_data->len, 1024), so it is always a
++			 * multiple of the 512-byte max packet size and the buffer
++			 * allocated above is large enough.  The copy back to userspace
++			 * is still limited to io_data->len by the min_t() below.
++			 */
+  			req->buf      = data;
+- 			req->length   = io_data->len;
++ 			req->length   = io_data->read ? buffer_len : io_data->len;
+  			req->context  = &done;
+  			req->complete = ffs_epfile_io_complete;
+  			ret = usb_ep_queue(ep->ep, req, GFP_ATOMIC);
+diff --git a/include/media/msmb_isp.h b/include/media/msmb_isp.h
+index 4dedb4ddd57..1178909be7c 100644
+--- a/include/media/msmb_isp.h
++++ b/include/media/msmb_isp.h
+@@ -143,6 +143,10 @@ struct msm_vfe_axi_stream_request_cmd {
+ 	uint32_t init_frame_drop; /*MAX 31 Frames*/
+ 	enum msm_vfe_frame_skip_pattern frame_skip_pattern;
+ 	uint8_t buf_divert; /* if TRUE no vb2 buf done. */
++	/* Complete only on the Y write master.  The CBCR WM still writes
++	 * (half-height NV12), but it is not part of the composite group and
++	 * is not waited on.  Used by the luma-only Krux camera path. */
++	uint8_t y_only;
+ 	/*Return values*/
+ 	uint32_t axi_stream_handle;
+ };
+diff --git a/init/main.c b/init/main.c
+index e2e1464d520..023d431b5c5 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -799,6 +799,10 @@ static void __init do_pre_smp_initcalls(void)
+ 		do_one_initcall(*fn);
+ }
+ 
++#ifdef CONFIG_MEMORY_WIPE
++extern void wipe_poweroff(void);
++#endif
++
+ static void run_init_process(const char *init_filename)
+ {
+ 	argv_init[0] = init_filename;
+@@ -877,6 +881,10 @@ static int __init kernel_init(void * unused)
+ 
+ 	do_basic_setup();
+ 
++#ifdef CONFIG_MEMORY_WIPE
++	wipe_poweroff();
++#endif
++
+ 	/* Open the /dev/console on the rootfs, this should never fail */
+ 	if (sys_open((const char __user *) "/dev/console", O_RDWR, 0) < 0)
+ 		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
+diff --git a/kernel/sys.c b/kernel/sys.c
+index 5d3b61ea619..7df4f8de661 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -46,6 +46,10 @@
+ 
+ #include <linux/compat.h>
+ #include <linux/syscalls.h>
++#ifdef CONFIG_MEMORY_WIPE_ON_POWEROFF
++extern int wipe_from_marker;
++extern void krux_wipe_reboot(void);
++#endif
+ #include <linux/kprobes.h>
+ #include <linux/user_namespace.h>
+ 
+@@ -479,6 +483,18 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
+ 	if (ret)
+ 		return ret;
+ 
++#ifdef CONFIG_MEMORY_WIPE_ON_POWEROFF
++	/*
++	 * A poweroff becomes a recovery reboot so the next boot can wipe
++	 * RAM at mem_init(), before userspace.  The wipe boot itself powers
++	 * off directly (kernel_power_off in kernel_init), not through here.
++	 */
++	if (cmd == LINUX_REBOOT_CMD_POWER_OFF && !wipe_from_marker) {
++		krux_wipe_reboot();
++		return 0;
++	}
++#endif
++
+ 	/* Instead of trying to make the power_off code look like
+ 	 * halt when pm_power_off is not set do it the easy way.
+ 	 */
