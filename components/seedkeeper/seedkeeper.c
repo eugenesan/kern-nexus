@@ -256,11 +256,20 @@ static int sk_sc_init(kern_seedkeeper_t *sk) {
    * 0x81 command; a GET_STATUS between attempts also keeps the link alive. */
   int init_rc = -1;
   for (int attempt = 0; attempt < 3; attempt++) {
+    if (attempt) {
+      /* A lost 0x81 may still have initialized the applet.  Re-selecting
+       * resets its secure-channel state; otherwise the next 0x81 is
+       * answered with 6E00 (class not supported). */
+      (void)seedkeeper_select(sk);
+      usleep(100000);
+    }
     resp_len = sizeof(resp);
     init_rc = seedkeeper_exchange(sk, apdu, sizeof(apdu), resp, &resp_len, &sw);
     sk_trace("init try", init_rc);
-    if (init_rc == 0)
+    if (init_rc == 0 && sw == SEEDKEEPER_SW_OK)
       break;
+    if (init_rc == 0 && sw != SEEDKEEPER_SW_OK)
+      init_rc = -1;
     (void)sk_keepalive(sk);
     usleep(50000);
   }
