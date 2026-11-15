@@ -148,6 +148,13 @@ for `fastboot boot`.
 
 ## 6. Verification
 
+* **Development builds:** `scripts/build-kernel.sh --no-wipe` (or
+  `KERN_WIPE=0`) turns off both `CONFIG_MEMORY_WIPE` and
+  `CONFIG_MEMORY_WIPE_ON_POWEROFF` through
+  `tools/kernel/profiles/hammerhead-dev-nowipe.list`.  The script fails if
+  the resulting `.config` still enables either symbol.  Use this while
+  iterating; a second boot followed by a power-off is the release wipe,
+  not a crash.  Release builds keep the default (`--wipe`).
 * `scripts/build-kernel.sh` prints the final config; check
   `CONFIG_MEMORY_WIPE_ON_POWEROFF=y`, `CONFIG_NFC_BCM2079X=y`,
   `CONFIG_KERNEL_XZ=y`, and the radios off.

@@ -1,0 +1,9 @@
+# Development-only kernel switches.  Use with scripts/build-kernel.sh
+# --no-wipe (or KERN_WIPE=0); never in a release image.
+#
+# The shipped kernel wipes free RAM on poweroff.  While developing, that
+# looks like a second boot followed by a power-off, and it destroys the
+# evidence on every reset.  Turn the trigger and the driver off for dev
+# builds; the release profile keeps both.
+CONFIG_MEMORY_WIPE_ON_POWEROFF=n
+CONFIG_MEMORY_WIPE=n

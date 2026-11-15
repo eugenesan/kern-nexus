@@ -92,6 +92,9 @@ The patch is against `lineage-23.2`.
 ```sh
 bash scripts/build-kernel.sh
 # -> /tmp/kern-nexus/artifacts/build/ko/arch/arm/boot/zImage-dtb
+
+# Development: no RAM wipe on poweroff (no second boot / power-off).
+bash scripts/build-kernel.sh --no-wipe
 # -> /tmp/kern-nexus/artifacts/build/ko/.config
 # -> /tmp/kern-nexus/artifacts/build/ko.build.log
 ```
