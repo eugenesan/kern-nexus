@@ -53,7 +53,6 @@ struct mdp_display_commit {
 static pthread_mutex_t s_lvgl_mutex;
 static pthread_once_t s_lvgl_once = PTHREAD_ONCE_INIT;
 static lv_display_t *s_display;
-static lv_timer_t *s_commit_timer;
 static int s_fb_fd = -1;
 static void *s_fb_map;
 static size_t s_fb_size;
@@ -107,11 +106,11 @@ static int open_fb(void) {
 static void panel_commit(void);
 
 /* LVGL renders inside lv_timer_handler(), which does not call the BSP's
- * lock/unlock pair.  The panel commit is what copies the framebuffer to the
- * scanout plane, so without a periodic commit the framebuffer changes while
- * the panel keeps showing an old (or empty) page. */
-static void commit_timer_cb(lv_timer_t *timer) {
-  (void)timer;
+ * lock/unlock pair.  Commit once after each completed render, not on a
+ * timer: MSMFB_DISPLAY_COMMIT waits for pending commits, so a 16 ms timer
+ * can block the LVGL thread behind the display driver. */
+static void display_render_ready_cb(lv_event_t *event) {
+  (void)event;
   panel_commit();
 }
 
@@ -185,7 +184,8 @@ lv_display_t *bsp_display_start(void) {
   s_display = lv_linux_fbdev_create();
   if (s_display) {
     lv_linux_fbdev_set_file(s_display, FB_NODE);
-    s_commit_timer = lv_timer_create(commit_timer_cb, 16, NULL);
+    lv_display_add_event_cb(s_display, display_render_ready_cb,
+                            LV_EVENT_RENDER_READY, NULL);
   }
 #if LV_USE_EVDEV
   (void)lv_evdev_create(LV_INDEV_TYPE_POINTER, TOUCH_NODE);
@@ -196,10 +196,7 @@ lv_display_t *bsp_display_start(void) {
 
 bool bsp_display_lock(uint32_t timeout_ms) { return lvgl_port_lock(timeout_ms); }
 
-void bsp_display_unlock(void) {
-  panel_commit();
-  lvgl_port_unlock();
-}
+void bsp_display_unlock(void) { lvgl_port_unlock(); }
 
 esp_err_t bsp_display_brightness_init(void) { return ESP_OK; }
 

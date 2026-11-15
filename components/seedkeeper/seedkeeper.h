@@ -113,6 +113,12 @@ typedef struct {
   int needs_secure_channel;
   uint16_t last_sw;
   char pin[SEEDKEEPER_PIN_MAX + 1];
+  /* Secure channel state (applet v0.1 with needs_secure_channel=1). */
+  int secure_ready;
+  uint8_t sc_private[32];
+  uint8_t sc_session_key[16];
+  uint8_t sc_mac_key[20];
+  uint32_t sc_counter;
 } kern_seedkeeper_t;
 
 void seedkeeper_init(kern_seedkeeper_t *sk, kern_nfc_transport_t transport,
