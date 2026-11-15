@@ -143,6 +143,18 @@ esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
   (void)ignored;
   if (s_started)
     return ESP_OK;
+
+  /* A previous kern process may have left camd running.  Reuse its socket
+   * instead of starting a second daemon: two camds fight over the ISP and
+   * one of them publishes frames nobody reads. */
+  int existing = connect_camd();
+  if (existing >= 0) {
+    close(existing);
+    s_started = 1;
+    klog("kern-nexus camera: reusing running camd\n");
+    return ESP_OK;
+  }
+
   const char *bin = access(CAMD_LOCAL, X_OK) == 0 ? CAMD_LOCAL : CAMD_BUNDLED;
   if (access(bin, X_OK) != 0)
     return ESP_ERR_NOT_FOUND;

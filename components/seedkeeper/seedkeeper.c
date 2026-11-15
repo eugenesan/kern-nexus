@@ -767,10 +767,12 @@ int seedkeeper_list_headers(kern_seedkeeper_t *sk,
     uint16_t sw = 0;
     int rc = seedkeeper_command(sk, SEEDKEEPER_INS_LIST_HEADERS, 0x00, p2, NULL,
                                 0, data, &len, &sw);
-    if (rc != SEEDKEEPER_OK)
-      return rc;
+    /* 9C12 ends the walk and is reported as an error status by the command
+     * layer; it is the normal exit, not a failure. */
     if (sw == SEEDKEEPER_SW_NO_MORE_SECRETS)
       break;
+    if (rc != SEEDKEEPER_OK)
+      return rc;
     if (sw != SEEDKEEPER_SW_OK)
       return SEEDKEEPER_ERR_STATUS;
     if (used == cap) {
