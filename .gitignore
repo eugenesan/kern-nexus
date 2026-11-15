@@ -1,0 +1,9 @@
+artifacts/
+build/
+third_party/
+*.o
+*.a
+*.so
+*.pyc
+__pycache__/
+!artifacts/README.md
