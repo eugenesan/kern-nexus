@@ -27,9 +27,12 @@ Next steps:
 3. Validate the libwally test against these 166 vectors before signing on
    hardware.
 
-The vectors come from:
+The vectors are byte-identical in the SeedSigner reference and the Krux
+vendored embit:
 
 ```
+/home/user/Develop/src/krux-mobile/seedsigner  (branch privkeio/unified-sighash,
+  tests/unified/data/unified_sighash.json)
 /home/user/Develop/src/krux-nexus/krux/vendor/embit/tests/tests/data/unified_sighash.json
 ```
 
