@@ -162,6 +162,10 @@ int seedkeeper_pack_bip39(const uint8_t *master_seed, size_t master_seed_len,
                           const uint8_t *entropy, size_t entropy_len,
                           const char *passphrase, uint8_t *out, size_t cap,
                           size_t *out_len);
+/* First field of a BIP39 Masterseed secret: the stored 64-byte seed. */
+int seedkeeper_bip39_master_seed(const uint8_t *secret, size_t secret_len,
+                                 uint8_t *out, size_t cap, size_t *out_len);
+
 int seedkeeper_unpack_bip39(const uint8_t *secret, size_t secret_len,
                             uint8_t *entropy, size_t entropy_cap,
                             size_t *entropy_len, char *passphrase,

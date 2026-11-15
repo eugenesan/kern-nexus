@@ -1013,6 +1013,21 @@ int seedkeeper_pack_bip39(const uint8_t *master_seed, size_t master_seed_len,
   return SEEDKEEPER_OK;
 }
 
+int seedkeeper_bip39_master_seed(const uint8_t *secret, size_t secret_len,
+                                 uint8_t *out, size_t cap, size_t *out_len) {
+  size_t n;
+  if (!secret || secret_len < 1 || !out || !out_len)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  n = secret[0];
+  if (n == 0 || n > secret_len - 1)
+    return SEEDKEEPER_ERR_PARSE;
+  if (n > cap)
+    return SEEDKEEPER_ERR_SPACE;
+  memcpy(out, secret + 1, n);
+  *out_len = n;
+  return SEEDKEEPER_OK;
+}
+
 static int seedkeeper_take(const uint8_t *secret, size_t secret_len,
                            size_t *offset, uint8_t **chunk, size_t *chunk_len) {
   size_t n;
