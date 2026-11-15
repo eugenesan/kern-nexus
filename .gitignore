@@ -10,4 +10,5 @@ __pycache__/
 tools/sighash/test_unified
 rootfs/stub/kern-init
 components/*/test/test_*
+!components/*/test/test_*.c
 components/nfc/probe/nfc_probe

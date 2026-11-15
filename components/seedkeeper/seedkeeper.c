@@ -253,7 +253,10 @@ int seedkeeper_parse_header(const uint8_t *data, size_t len,
 
 int seedkeeper_select(kern_seedkeeper_t *sk) {
   uint8_t apdu[5 + sizeof(seedkeeper_aid)];
-  uint8_t resp[2];
+  /* SELECT returns the applet's FCI (13 bytes on a SeedKeeper).  A 2-byte
+   * buffer makes the transport fail before it can hand back the status
+   * word, which reads as a dead card. */
+  uint8_t resp[256];
   size_t resp_len = sizeof(resp);
   uint16_t sw = 0;
   int rc;
