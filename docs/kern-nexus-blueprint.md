@@ -320,9 +320,9 @@ These need an explicit answer before the affected work is final:
 10. **Secure boot / signing** — kern's ESP32 secure boot does not apply.
     Decide whether the Linux binary gets any signature/verification at all
     (the kernel/bootloader path does not verify it in this design).
-11. **XBT / BLAKE2b** — the SeedSigner reference is available; the
-    remaining work is BLAKE2b block-header support (not a second signature
-    digest) and the XBT network/activation rules.
+11. **XBT / BLAKE2b** — `components/xbt` now has BLAKE2b, the 164-byte v2
+    header and PoW with the five official vectors.  Remaining: activation
+    height/network constants, chain selection and PSBT marking.
 
 ## 12. Prompt for the coding agent
 

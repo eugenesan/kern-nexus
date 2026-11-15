@@ -227,7 +227,7 @@ Implement the chain selection as a build/runtime rule, not a UI toggle:
 typedef enum { KERN_CHAIN_BITCOIN, KERN_CHAIN_XBT } kern_chain_id;
 ```
 
-The XBT side needs:
+The XBT side has a first implementation in `components/xbt` (`blake2b`, v2 header, PoW); it still needs:
 
 * BLAKE2b block-header hashing and the v2 block header (height + tx count)
   that the deployment requires;

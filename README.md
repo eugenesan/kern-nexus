@@ -100,7 +100,7 @@ and bring-up plan:
 * mbedTLS and LVGL offline vendoring (the target build needs ARM static
   libraries; the simulator fetches LVGL from the network);
 * the PIN/settings policy is `/data/kern` (resolved);
-* the exact meaning of `k_run`/`k_next` (kernel phases assumed);
+* `k_run`/`k_next` are the kernel phases (resolved);
 * camera geometry (keep Krux 720×960/960×1280);
 * whether to keep the wired USB Ethernet driver in the threat model;
 * whether the Linux binary gets any signature/verification at all.
