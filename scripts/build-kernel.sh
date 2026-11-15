@@ -26,8 +26,11 @@ if [ ! -f "$TREE/Makefile" ]; then
 fi
 
 # The modified defconfig is kept outside the tree (KernelSU removed).
-cp "$ROOT/tools/kernel/config/lineageos_hammerhead_defconfig" \
-   "$TREE/arch/arm/configs/$DEFCONFIG_NAME"
+# Install it only for the build, then remove it so the kernel submodule
+# stays clean.
+DEFCONFIG_DST="$TREE/arch/arm/configs/$DEFCONFIG_NAME"
+cp "$ROOT/tools/kernel/config/lineageos_hammerhead_defconfig" "$DEFCONFIG_DST"
+trap 'rm -f "$DEFCONFIG_DST"' EXIT
 
 mkdir -p "$OUT"
 DEFCONFIG_NAME="$DEFCONFIG_NAME" \

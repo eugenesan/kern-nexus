@@ -9,3 +9,4 @@ __pycache__/
 !artifacts/README.md
 tools/sighash/test_unified
 rootfs/stub/kern-init
+components/*/test/test_*

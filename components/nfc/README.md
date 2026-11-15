@@ -30,3 +30,24 @@ Do not power-cycle the chip while another client has it open.
 
 See [../../docs/hardware.md](../../docs/hardware.md#nfc-bcm2079x) for the
 measured framing and bring-up trace.
+
+## Implemented C layer
+
+`nfc_nci.c` now contains the NCI/ISO-DEP implementation ported from
+`krux/src/nfc.py`:
+
+- `kern_nfc_bring_up()` — the vendor bring-up sequence, exact SET_CONFIG
+  payloads, discover/select;
+- `kern_nfc_transceive()` — one APDU, data + SW1/SW2;
+- 8 s poll window, 1 s rediscover, 200 ms activation settle, 5 s APDU
+  timeout;
+- `nfc_nci_internal.h` exposes the framing helpers for the host test.
+
+```sh
+cd components/nfc/test
+make test
+# nfc_nci: 78 checks passed
+```
+
+The hardware path is still untested; the next device check is no-card →
+tag → SeedKeeper.

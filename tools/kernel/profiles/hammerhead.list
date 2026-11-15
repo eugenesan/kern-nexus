@@ -245,3 +245,17 @@ CONFIG_SIT
 #       Audio / camera DSPs. Unrelated to radios despite the name.
 #
 # Exceptions can be passed at the command line: --allow CONFIG_RFKILL
+# ===========================================================================
+# KernelSU (not used by kern-nexus)
+# ===========================================================================
+# The kernel tree carries KernelSU on this branch; the delivered signer runs
+# as root from the ramdisk and does not need it.  Force it and its helpers
+# off so the build cannot silently keep the root-hook surface.
+CONFIG_KSU
+CONFIG_KSU_KPROBES_KSUD
+CONFIG_KSU_TAMPER_SYSCALL_TABLE
+CONFIG_KSU_FEATURE_SULOG
+CONFIG_KSU_FEATURE_ADBROOT
+CONFIG_KSU_DEBUG
+CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED
+CONFIG_KSU_LSM_SECURITY_HOOKS
