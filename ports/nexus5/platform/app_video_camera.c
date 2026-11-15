@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,6 +37,15 @@ static int s_sock = -1;
 static app_video_frame_operation_cb_t s_cb;
 static uint32_t s_w = 720, s_h = 960;
 static int s_started;
+
+static void klog(const char *fmt, ...) {
+  int fd = open("/dev/kmsg", O_WRONLY);
+  if (fd >= 0) {
+    va_list ap; va_start(ap, fmt);
+    vdprintf(fd, fmt, ap); va_end(ap);
+    close(fd);
+  }
+}
 
 static int read_exact(int fd, void *buf, size_t len) {
   uint8_t *p = buf;
@@ -127,12 +137,20 @@ static void *camera_thread(void *arg) {
       rgb_h = h;
     }
     if (rgb && s_cb && !s_stop) {
+      static int frames;
+      if (!frames)
+        klog("kern-nexus camera: first frame %ux%u (y=%u uv=%u)\n", w, h,
+             ysz, uvsz);
+      frames++;
       yuv420_to_rgb565(frame, w, h, rgb);
       s_w = w;
       s_h = h;
       s_cb((uint8_t *)rgb, 0, w, h, (size_t)w * h * 2);
     }
     free(frame);
+    /* The scanner's software PPA is expensive; 10 fps keeps the UI
+     * responsive and is ample for QR/entropy. */
+    usleep(100000);
   }
   return NULL;
 }
@@ -156,6 +174,7 @@ esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
   }
   if (pid < 0)
     return ESP_FAIL;
+  klog("kern-nexus camera: spawned %s pid=%d\n", bin, pid);
   for (int i = 0; i < 100; i++) {
     if (access(CAMD_SOCK, F_OK) == 0) {
       s_started = 1;
