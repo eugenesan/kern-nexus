@@ -266,7 +266,44 @@ portable implementation; this is SeedSigner-compatible.  Secure-channel
 secrets (`P1=0x02`) need the card ECDSA key and per-secret AES key and are
 not portable without the handshake.
 
-### 2.2 Secure channel port
+### 2.2 What kern does with the card
+
+`kern/main/pages/seedkeeper/` is the card's user interface.  All of it
+goes through `seedkeeper_page.c`, which asks for the PIN before any card
+command is sent, runs the blocking APDUs on the worker task and keeps the
+session open while the user reads a menu.  Errors are drawn inside the
+page, never in a modal: a modal outlives the page and then calls back
+into deleted LVGL objects.
+
+| Where | Flow | What it does |
+|---|---|---|
+| Load Mnemonic → From SeedKeeper | load | exports a BIP39 Masterseed, checks it against the seed the card stored, then asks for a passphrase only when the secret did not carry one |
+| New Mnemonic → From SeedKeeper | new seed | the card generates 32 random bytes (`INS 0xA0`), the device turns them into a 24-word mnemonic and the card keeps the BIP39 Masterseed of it |
+| Back Up → To SeedKeeper | backup | stores the loaded wallet on the card as a BIP39 Masterseed, under a label the user gives |
+| Home → SeedKeeper | list | every secret on the card: id, label and type |
+| Home → SeedKeeper | delete | picks a secret and frees it (`INS 0xA5`) after a confirmation |
+| Home → SeedKeeper | card info | applet and protocol version, secure channel, setup state, PIN tries left |
+| Home → SeedKeeper | free space | free, used and total card memory |
+
+Two rules the flows keep:
+
+* A seed **generated on the card carries no passphrase**.  The card has no
+  passphrase of its own, so the BIP39 Masterseed it stores is derived from
+  the entropy alone and the device loads exactly that.  A wallet that
+  needs a passphrase is created elsewhere and copied to the card with
+  "Back Up → To SeedKeeper".
+* The backup flow **checks the passphrase against the loaded wallet** by
+  comparing the master key fingerprint of the derived seed with the loaded
+  key's.  A wrong passphrase fails instead of quietly writing a different
+  wallet to the card.
+
+The applet's own rules that the port follows: a generated secret is kept
+as a plain `[size | bytes]` blob, an imported secret is padded by the card
+to a multiple of 16 bytes, the fingerprint is the first four bytes of the
+SHA-256 of the secret, and the export strips the padding and appends the
+card's ECDSA signature to the last chunk.
+
+### 2.3 Secure channel port
 
 If kern must read secure-channel secrets:
 
@@ -282,7 +319,7 @@ If kern must read secure-channel secrets:
 libwally-core has secp256k1 ECDH/recover; mbedTLS has AES-CBC/HMAC-SHA1.
 Keep the same byte layout as `seedkeeper_sc.py`.
 
-### 2.3 Test plan
+### 2.4 Test plan
 
 * A physical SeedKeeper/Satochip card; no card is needed for transport
   bring-up (the chip answers without a card).
@@ -294,6 +331,13 @@ Keep the same byte layout as `seedkeeper_sc.py`.
 * Remove/reinsert card mid-operation; verify reconnect/resume behaviour
   (only `GET_STATUS` is safe to repeat; stateful walks restart).
 * Secure channel, if enabled, against a card provisioned for it.
+* Generation round-trip: `INS 0xA0`, export the plain secret, check the
+  entropy, and check that the BIP39 Masterseed the card keeps reloads to
+  the same mnemonic.
+* Backup round-trip: store the loaded wallet, then load it again from the
+  card and compare the master key fingerprint.
+* Delete: free a secret and check that the card's secret count and free
+  memory follow.
 
 ## 3. Krux ↔ kern parity and port scope
 
