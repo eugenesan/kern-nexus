@@ -134,7 +134,7 @@ kernel wipe.
 
 ```sh
 bash scripts/build-kernel.sh
-# -> artifacts/built/ko/arch/arm/boot/zImage-dtb
+# -> /tmp/kern-nexus/artifacts/build/ko/arch/arm/boot/zImage-dtb
 ```
 
 The script uses `linux/` when present; otherwise it clones the fork branch

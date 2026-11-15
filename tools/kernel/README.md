@@ -33,9 +33,9 @@ kernel tree, or uses an existing tree.  It builds with the host
 `arm-linux-gnueabihf-gcc` and writes:
 
 ```
-artifacts/built/ko/arch/arm/boot/zImage-dtb
-artifacts/built/ko/.config
-artifacts/built/ko.build.log
+/tmp/kern-nexus/artifacts/build/ko/arch/arm/boot/zImage-dtb
+/tmp/kern-nexus/artifacts/build/ko/.config
+/tmp/kern-nexus/artifacts/build/ko.build.log
 ```
 
 ## Regenerating the patch

@@ -9,9 +9,10 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/env.sh"
 
 TREE="${KERNEL_TREE:-$ROOT/linux}"
-OUT="${KERNEL_OUT:-$ROOT/artifacts/built/ko}"
+OUT="${KERNEL_OUT:-$KERN_NEXUS_BUILD/ko}"
 PROFILE="${PROFILE:-$ROOT/tools/kernel/profiles/hammerhead.list}"
 KEEPLISTS="${KEEPLISTS:-$ROOT/tools/kernel/profiles/hammerhead-keep.list $ROOT/tools/kernel/profiles/hammerhead-camera.list}"
 DEFCONFIG_NAME="${DEFCONFIG_NAME:-kern_nexus_hammerhead_defconfig}"

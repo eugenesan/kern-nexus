@@ -48,7 +48,7 @@ kern-nexus/
   tools/                kernel profiles/build helper, host serial helper
   linux/                kernel tree (submodule, airgap/cam-xz-wipe)
   tools/kernel/         kernel patches, defconfig, profiles, builder
-  artifacts/            TWRP template and generated images (gitignored)
+  artifacts/            TWRP template only; generated files go to /tmp (gitignored)
   docs/                 this guide and the detail documents
 ```
 

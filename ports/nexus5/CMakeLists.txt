@@ -23,7 +23,10 @@ endif()
 # ARM static mbedTLS (build with scripts/build-mbedtls.sh).
 set(MBEDTLS_ROOT "$ENV{MBEDTLS_ROOT}" CACHE PATH "mbedTLS install prefix")
 if(NOT MBEDTLS_ROOT)
-  set(MBEDTLS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../artifacts/deps/mbedtls-armhf")
+  set(MBEDTLS_ROOT "$ENV{KERN_NEXUS_DEPS}/mbedtls-armhf")
+endif()
+if(NOT MBEDTLS_ROOT)
+  set(MBEDTLS_ROOT "/tmp/kern-nexus/artifacts/deps/mbedtls-armhf")
 endif()
 # The toolchain restricts library search to the sysroot; the vendored
 # mbedTLS is outside it, so look explicitly first.
@@ -59,7 +62,10 @@ set(MBEDX509_LIB "${_MBED_mbedx509_LIB}")
 # Vendored static zlib (the ARM sysroot has none).
 set(ZLIB_ROOT "$ENV{ZLIB_ROOT}" CACHE PATH "zlib install prefix")
 if(NOT ZLIB_ROOT)
-  set(ZLIB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../artifacts/deps/zlib-armhf")
+  set(ZLIB_ROOT "$ENV{KERN_NEXUS_DEPS}/zlib-armhf")
+endif()
+if(NOT ZLIB_ROOT)
+  set(ZLIB_ROOT "/tmp/kern-nexus/artifacts/deps/zlib-armhf")
 endif()
 if(EXISTS "${ZLIB_ROOT}/include/zlib.h")
   set(ZLIB_INCLUDE_DIR "${ZLIB_ROOT}/include")

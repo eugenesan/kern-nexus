@@ -9,12 +9,12 @@ arm-linux-gnueabihf-gcc -O2 -static -s -o /tmp/kern-placeholder placeholder.c
 
 KERN_RELEASE=1 KERN_SEAL=1 KERN_BIN=/tmp/kern-placeholder \
   bash rootfs/build-stub-ramdisk.sh --standard --bundle --force
-RAMDISK=artifacts/built/ramdisk-kern-bundled \
+RAMDISK=/tmp/kern-nexus/artifacts/build/ramdisk-kern-bundled \
   bash rootfs/make-boot-image.sh \
   artifacts/twrp-3.7.0_9-HH.R.17-MADV_WIPEONFORK.img \
-  ../krux-nexus/artifacts/built/kernel-final/zImage-dtb \
-  artifacts/built/boot-kern-bootstrap.img
-fastboot boot artifacts/built/boot-kern-bootstrap.img
+  /tmp/kern-nexus/artifacts/build/ko/arch/arm/boot/zImage-dtb \
+  /tmp/kern-nexus/artifacts/build/boot-kern-bootstrap.img
+fastboot boot /tmp/kern-nexus/artifacts/build/boot-kern-bootstrap.img
 ```
 
 Use this to prove TWRP, `start-kern`, `start-adb`, `start-serial`, the

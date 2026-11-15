@@ -19,18 +19,19 @@
 #   ./make-boot-image.sh [TEMPLATE.img] [KERNEL] [OUT.img]
 #
 # RAMDISK=path selects a different ramdisk, for example the one built
-# with build-stub-ramdisk.sh --bundle (artifacts/built/ramdisk-bundled).
+# with build-stub-ramdisk.sh --bundle (/tmp/kern-nexus/artifacts/build/ramdisk-kern-bundled).
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+source "$ROOT/scripts/env.sh"
 TEMPLATE=${1:-$ROOT/artifacts/twrp-3.7.0_9-HH.R.17-MADV_WIPEONFORK.img}
 # The kernel the shipped boot-stub.img pairs with.  It is NOT the same
 # one the current kernel build produces: this is the kernel that was
 # flashed and verified with the stub, so it is kept next to the image
 # rather than rebuilt.
-KERNEL=${2:-$ROOT/artifacts/built/ko/arch/arm/boot/zImage-dtb}
-OUT=${3:-$ROOT/artifacts/built/boot-kern.img}
-RAMDISK=${RAMDISK:-$ROOT/artifacts/built/ramdisk-kern}
+KERNEL=${2:-$KERN_NEXUS_BUILD/ko/arch/arm/boot/zImage-dtb}
+OUT=${3:-$KERN_NEXUS_BUILD/boot-kern.img}
+RAMDISK=${RAMDISK:-$KERN_NEXUS_BUILD/ramdisk-kern}
 EXTRA_CMDLINE=${EXTRA_CMDLINE:-}
 WORK=${WORK:-/tmp/opencode/kern-boot}
 

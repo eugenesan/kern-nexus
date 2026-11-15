@@ -20,8 +20,8 @@ communicate.  The NFC driver is deliberately kept.
 
 Usage:
     python3 scripts/misc/check-airgap.py \
-        --config artifacts/built/ko/.config \
-        --ramdisk artifacts/built/ramdisk-bundled
+        --config /tmp/kern-nexus/artifacts/build/ko/.config \
+        --ramdisk /tmp/kern-nexus/artifacts/build/ramdisk-kern-bundled
 """
 import argparse
 import os

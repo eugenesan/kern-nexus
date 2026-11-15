@@ -56,10 +56,10 @@ bash scripts/build-image.sh
 
 # development: boot without writing a partition
 adb reboot bootloader
-fastboot boot artifacts/built/boot-kern-dev.img
+fastboot boot /tmp/kern-nexus/artifacts/build/boot-kern-dev.img
 
 # delivered: recovery only; never flash boot
-fastboot flash recovery artifacts/built/boot-kern-standard-release.img
+fastboot flash recovery /tmp/kern-nexus/artifacts/build/boot-kern-standard-release.img
 ```
 
 ## Layout
@@ -72,7 +72,7 @@ rootfs/      init stub, ramdisk builder, boot-image packer
 scripts/     kernel/kern/image/deploy wrappers
 tools/       kernel patches/profiles, host serial helper, air-gap gate
 linux/       kernel tree (submodule, airgap/cam-xz-wipe)
-artifacts/   TWRP template and generated images (gitignored)
+artifacts/   TWRP template; generated files go to /tmp (gitignored)
 docs/        the guide and detail documents
 ```
 

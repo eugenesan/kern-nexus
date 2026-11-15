@@ -9,6 +9,7 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+source "$ROOT/scripts/env.sh"
 FORCE=""
 BUNDLE=${BUNDLE:-0}
 STANDARD=${STANDARD:-0}
@@ -23,9 +24,9 @@ while [ $# -gt 0 ]; do
 done
 TWRP_IMG=${1:-$ROOT/artifacts/twrp-3.7.0_9-HH.R.17-MADV_WIPEONFORK.img}
 if [ "$BUNDLE" = "1" ]; then
-  OUT=${OUT:-$ROOT/artifacts/built/ramdisk-kern-bundled}
+  OUT=${OUT:-$KERN_NEXUS_BUILD/ramdisk-kern-bundled}
 else
-  OUT=${OUT:-$ROOT/artifacts/built/ramdisk-kern}
+  OUT=${OUT:-$KERN_NEXUS_BUILD/ramdisk-kern}
 fi
 WORK=${WORK:-/tmp/opencode/kern-ramdisk}
 [ -f "$TWRP_IMG" ] || { echo "no TWRP image at $TWRP_IMG" >&2; exit 1; }
@@ -87,14 +88,14 @@ mkdir -p "$WORK/rd/lib/firmware"
 cp "$CPP_FW" "$WORK/rd/lib/firmware/cpp_firmware_v1_2_0.fw"
 
 if [ "$BUNDLE" = "1" ]; then
-  KERN_BIN=${KERN_BIN:-$ROOT/artifacts/built/kern-nexus}
+  KERN_BIN=${KERN_BIN:-$KERN_NEXUS_BUILD/kern-nexus}
   [ -x "$KERN_BIN" ] || { echo "no kern binary at $KERN_BIN" >&2; exit 1; }
   BUNDLE_DIR="$WORK/rd/opt/kern"
   rm -rf "$BUNDLE_DIR"
   mkdir -p "$BUNDLE_DIR"
   cp "$KERN_BIN" "$BUNDLE_DIR/kern-nexus"
   chmod 755 "$BUNDLE_DIR/kern-nexus"
-  CAMD_BIN=${CAMD_BIN:-$ROOT/artifacts/built/camd}
+  CAMD_BIN=${CAMD_BIN:-$KERN_NEXUS_BUILD/camd}
   if [ -x "$CAMD_BIN" ]; then
     cp "$CAMD_BIN" "$BUNDLE_DIR/camd"
     chmod 755 "$BUNDLE_DIR/camd"

@@ -11,13 +11,14 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/env.sh"
 
 MODE="${1:-standard}"
-KERNEL_IMG="${KERNEL_IMG:-$ROOT/artifacts/built/ko/arch/arm/boot/zImage-dtb}"
-KERN_BIN="${KERN_BIN:-$ROOT/artifacts/built/kern-nexus}"
+KERNEL_IMG="${KERNEL_IMG:-$KERN_NEXUS_BUILD/ko/arch/arm/boot/zImage-dtb}"
+KERN_BIN="${KERN_BIN:-$KERN_NEXUS_BUILD/kern-nexus}"
 [ -f "$KERNEL_IMG" ] || { echo "no kernel: run scripts/build-kernel.sh" >&2; exit 1; }
 [ -x "$KERN_BIN" ] || { echo "no kern binary: run scripts/build-kern.sh" >&2; exit 1; }
-CAMD_BIN="${CAMD_BIN:-$ROOT/artifacts/built/camd}"
+CAMD_BIN="${CAMD_BIN:-$KERN_NEXUS_BUILD/camd}"
 if [ ! -x "$CAMD_BIN" ]; then
   bash scripts/build-camd.sh
 fi
@@ -31,15 +32,17 @@ case "$MODE" in
   standard)
     name=standard
     [ "$KERN_SEAL" = "1" ] && name=standard-release || name=standard-release-audit
-    bash rootfs/build-stub-ramdisk.sh --standard --bundle --force
-    RAMDISK="$ROOT/artifacts/built/ramdisk-kern-bundled"
-    OUT="$ROOT/artifacts/built/boot-kern-${name}.img"
+    OUT="$KERN_NEXUS_BUILD/ramdisk-kern-bundled" \
+      bash rootfs/build-stub-ramdisk.sh --standard --bundle --force
+    RAMDISK="$KERN_NEXUS_BUILD/ramdisk-kern-bundled"
+    OUT="$KERN_NEXUS_BUILD/boot-kern-${name}.img"
     ;;
   dev)
     name=dev
-    bash rootfs/build-stub-ramdisk.sh --force
-    RAMDISK="$ROOT/artifacts/built/ramdisk-kern"
-    OUT="$ROOT/artifacts/built/boot-kern-dev.img"
+    OUT="$KERN_NEXUS_BUILD/ramdisk-kern" \
+      bash rootfs/build-stub-ramdisk.sh --force
+    RAMDISK="$KERN_NEXUS_BUILD/ramdisk-kern"
+    OUT="$KERN_NEXUS_BUILD/boot-kern-dev.img"
     ;;
   *)
     echo "usage: $0 [standard|dev]" >&2
@@ -53,7 +56,7 @@ RAMDISK="$RAMDISK" bash rootfs/make-boot-image.sh \
 
 if [ "$MODE" = "standard" ]; then
     python3 tools/check-airgap.py \
-        --config "${KERNEL_CFG:-$ROOT/artifacts/built/ko/.config}" \
+        --config "${KERNEL_CFG:-$KERN_NEXUS_BUILD/ko/.config}" \
         --ramdisk "$RAMDISK"
 fi
 bash scripts/security-check.sh "$OUT"

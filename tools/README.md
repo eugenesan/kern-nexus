@@ -17,8 +17,8 @@ image:
 
 ```sh
 python3 tools/check-airgap.py \
-    --config artifacts/built/ko/.config \
-    --ramdisk artifacts/built/ramdisk-kern-bundled
+    --config /tmp/kern-nexus/artifacts/build/ko/.config \
+    --ramdisk /tmp/kern-nexus/artifacts/build/ramdisk-kern-bundled
 ```
 
 `serial-cmd.py`:

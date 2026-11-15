@@ -9,11 +9,12 @@
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+source "$ROOT/scripts/env.sh"
 MODE="${1:-dev}"
 
 case "$MODE" in
   dev)
-    BIN="${KERN_BIN:-$ROOT/artifacts/built/kern-nexus}"
+    BIN="${KERN_BIN:-$KERN_NEXUS_BUILD/kern-nexus}"
     [ -x "$BIN" ] || { echo "no binary: run scripts/build-kern.sh" >&2; exit 1; }
     adb wait-for-device
     adb shell 'mkdir -p /data/kern'
@@ -21,7 +22,7 @@ case "$MODE" in
     adb shell 'chmod 755 /data/kern/kern-nexus; setprop ctl.restart kern || (setprop ctl.stop kern; sleep 1; setprop ctl.start kern)'
     ;;
   fastboot)
-    IMG="${2:-$ROOT/artifacts/built/boot-kern-dev.img}"
+    IMG="${2:-$KERN_NEXUS_BUILD/boot-kern-dev.img}"
     [ -f "$IMG" ] || { echo "no image: $IMG" >&2; exit 1; }
     adb reboot bootloader 2>/dev/null || true
     sleep 3
@@ -29,7 +30,7 @@ case "$MODE" in
     fastboot boot "$IMG"
     ;;
   recovery)
-    IMG="${2:-$ROOT/artifacts/built/boot-kern-standard-release.img}"
+    IMG="${2:-$KERN_NEXUS_BUILD/boot-kern-standard-release.img}"
     [ -f "$IMG" ] || { echo "no image: $IMG" >&2; exit 1; }
     echo "This writes the recovery partition only: $IMG"
     printf "Type RECOVERY to continue: "

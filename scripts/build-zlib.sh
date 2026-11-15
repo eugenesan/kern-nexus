@@ -2,9 +2,10 @@
 # Build the vendored zlib as a static ARM library for the Linux target.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/env.sh"
 SRC="${ZLIB_SRC:-$ROOT/kern/third_party/zlib}"
-PREFIX="${ZLIB_ROOT:-$ROOT/artifacts/deps/zlib-armhf}"
-BUILD="${ZLIB_BUILD:-$ROOT/build/zlib-armhf}"
+PREFIX="${ZLIB_ROOT:-$KERN_NEXUS_DEPS/zlib-armhf}"
+BUILD="${ZLIB_BUILD:-$KERN_NEXUS_BUILD/zlib}"
 
 [ -f "$SRC/configure" ] || { echo "no zlib source at $SRC" >&2; exit 1; }
 rm -rf "$BUILD"; mkdir -p "$BUILD"

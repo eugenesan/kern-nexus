@@ -4,6 +4,20 @@ This is the concrete build guide for `kern-nexus`.  It assumes the
 repository is checked out at `~/Develop/src/kern-nexus` and the reference
 port at `~/Develop/src/krux-nexus`.
 
+## 0. Build locations
+
+Generated files do not live in the checkout:
+
+| path | what |
+|---|---|
+| `/tmp/kern-nexus/artifacts/build` | kernel `O=`, CMake tree, binaries, images |
+| `/tmp/kern-nexus/artifacts/deps` | static mbedTLS and zlib installs |
+
+`scripts/env.sh` defines them; override with `KERN_NEXUS_TMP`,
+`KERN_NEXUS_BUILD` or `KERN_NEXUS_DEPS`.  The repository's `artifacts/`
+holds only the TWRP template and its README.  The default is tmpfs, so a
+reboot clears the build tree; re-run the dependency scripts after that.
+
 ## 1. Toolchain
 
 | tool | version/use |
@@ -46,8 +60,8 @@ AES, HMAC, PBKDF2 and PSA.  On ESP-IDF those libraries are supplied by the
 IDF build; on Linux there is no IDF, so a static ARM mbedTLS is a real
 dependency, not an optional one.  `scripts/build-mbedtls.sh` builds a
 pinned source tree at `kern/third_party/mbedtls` (submodule, v3.6.7) into
-`artifacts/deps/mbedtls-armhf` (static).  `scripts/build-zlib.sh` does the
-same for `kern/third_party/zlib` (v1.3.1) into `artifacts/deps/zlib-armhf`.  `MBEDTLS_SRC` can override the
+`/tmp/kern-nexus/artifacts/deps/mbedtls-armhf` (static).  `scripts/build-zlib.sh` does the
+same for `kern/third_party/zlib` (v1.3.1) into `/tmp/kern-nexus/artifacts/deps/zlib-armhf`.  `MBEDTLS_SRC` can override the
 source path; the script does not download.  Required modules: `mbedtls`, `mbedcrypto`, `mbedx509`, PSA
 crypto headers.
 
@@ -77,9 +91,9 @@ The patch is against `lineage-23.2`.
 
 ```sh
 bash scripts/build-kernel.sh
-# -> artifacts/built/ko/arch/arm/boot/zImage-dtb
-# -> artifacts/built/ko/.config
-# -> artifacts/built/ko.build.log
+# -> /tmp/kern-nexus/artifacts/build/ko/arch/arm/boot/zImage-dtb
+# -> /tmp/kern-nexus/artifacts/build/ko/.config
+# -> /tmp/kern-nexus/artifacts/build/ko.build.log
 ```
 
 The wrapper:
@@ -112,7 +126,7 @@ The kernel features the port depends on:
 
 ```sh
 bash scripts/build-kern.sh
-# -> artifacts/built/kern-nexus
+# -> /tmp/kern-nexus/artifacts/build/kern-nexus
 ```
 
 The script configures `ports/nexus5` with
@@ -135,8 +149,8 @@ Expected output: ELF 32-bit ARM, statically linked, no `NEEDED` entries.
 Check with:
 
 ```sh
-file artifacts/built/kern-nexus
-arm-linux-gnueabihf-readelf -d artifacts/built/kern-nexus | grep NEEDED
+file /tmp/kern-nexus/artifacts/build/kern-nexus
+arm-linux-gnueabihf-readelf -d /tmp/kern-nexus/artifacts/build/kern-nexus | grep NEEDED
 ```
 
 ## 4. Ramdisk and boot image
@@ -150,9 +164,9 @@ The script builds the init stub, packs the TWRP ramdisk, installs kern and
 the CPP firmware, and then makes the boot image:
 
 ```
-artifacts/built/ramdisk-kern
-artifacts/built/boot-kern-standard-release.img
-artifacts/built/boot-kern-standard-release-audit.img  # KERN_SEAL=0
+/tmp/kern-nexus/artifacts/build/ramdisk-kern
+/tmp/kern-nexus/artifacts/build/boot-kern-standard-release.img
+/tmp/kern-nexus/artifacts/build/boot-kern-standard-release-audit.img  # KERN_SEAL=0
 ```
 
 The template is
@@ -180,14 +194,14 @@ Development/audit: boot without writing a partition:
 
 ```sh
 adb reboot bootloader
-fastboot boot artifacts/built/boot-kern-dev.img
+fastboot boot /tmp/kern-nexus/artifacts/build/boot-kern-dev.img
 ```
 
 Delivered firmware: write **recovery only**:
 
 ```sh
 adb reboot bootloader
-fastboot flash recovery artifacts/built/boot-kern-standard-release.img
+fastboot flash recovery /tmp/kern-nexus/artifacts/build/boot-kern-standard-release.img
 ```
 
 Then choose **Recovery mode** in the bootloader.  **Never flash `boot`.**
@@ -227,8 +241,8 @@ placeholder:
 
 ```sh
 bash scripts/build-bootstrap.sh
-# artifacts/built/boot-kern-bootstrap.img       (sealed, TWRP default)
-# artifacts/built/boot-kern-bootstrap-audit.img (adb on)
+# /tmp/kern-nexus/artifacts/build/boot-kern-bootstrap.img       (sealed, TWRP default)
+# /tmp/kern-nexus/artifacts/build/boot-kern-bootstrap-audit.img (adb on)
 ```
 
 `tools/bringup/placeholder.c` draws a checkerboard and logs to `/dev/kmsg`.
@@ -239,7 +253,7 @@ Use it to check:
 * `start-adb` and `start-serial` work;
 * the `/sbin/recovery` symlink and `/system/bin/sh` are present.
 
-It uses the kernel from `../krux-nexus/artifacts/built/kernel-final/
+It uses the kernel from `/tmp/kern-nexus/artifacts/build/ko/
 zImage-dtb` by default; set `KERNEL_IMG=` to another kernel.
 
 ## 9. Troubleshooting

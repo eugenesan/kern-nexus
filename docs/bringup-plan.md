@@ -36,7 +36,7 @@ Tasks:
 
    ```sh
    bash scripts/build-kern.sh
-   file artifacts/built/kern-nexus
+   file /tmp/kern-nexus/artifacts/build/kern-nexus
    ```
 
 **Exit:** ELF 32-bit ARM, statically linked; no `NEEDED`; no SDL2; no

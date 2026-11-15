@@ -3,7 +3,8 @@
 # binary.  This is the interim bridge until the camera is a kern thread.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${CAMD_BIN:-$ROOT/artifacts/built/camd}"
+source "$ROOT/scripts/env.sh"
+OUT="${CAMD_BIN:-$KERN_NEXUS_BUILD/camd}"
 CC=${CC:-arm-linux-gnueabihf-gcc}
 DEFS=""
 [ "${KERN_RELEASE:-1}" = "1" ] && DEFS="-DKRUX_RELEASE"

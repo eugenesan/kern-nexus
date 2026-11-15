@@ -3,12 +3,13 @@
 #
 #   MBEDTLS_SRC=/path/to/mbedtls-3.x bash scripts/build-mbedtls.sh
 #
-# Output: artifacts/deps/mbedtls-armhf/{include,lib}
+# Output: $KERN_NEXUS_DEPS/mbedtls-armhf/{include,lib} (default /tmp)
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/env.sh"
 SRC="${MBEDTLS_SRC:-$ROOT/kern/third_party/mbedtls}"
-BUILD="${MBEDTLS_BUILD:-$ROOT/build/mbedtls-armhf}"
-PREFIX="${MBEDTLS_ROOT:-$ROOT/artifacts/deps/mbedtls-armhf}"
+BUILD="${MBEDTLS_BUILD:-$KERN_NEXUS_BUILD/mbedtls}"
+PREFIX="${MBEDTLS_ROOT:-$KERN_NEXUS_DEPS/mbedtls-armhf}"
 
 [ -f "$SRC/CMakeLists.txt" ] || {
     echo "no mbedTLS source at $SRC (set MBEDTLS_SRC)" >&2

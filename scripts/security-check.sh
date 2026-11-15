@@ -2,8 +2,9 @@
 # Release gate for kern-nexus.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="${KERN_BIN:-$ROOT/artifacts/built/kern-nexus}"
-IMG="${1:-$ROOT/artifacts/built/boot-kern-standard-release.img}"
+source "$ROOT/scripts/env.sh"
+BIN="${KERN_BIN:-$KERN_NEXUS_BUILD/kern-nexus}"
+IMG="${1:-$KERN_NEXUS_BUILD/boot-kern-standard-release.img}"
 fail=0
 say() { echo "security-check: $*"; }
 bad() { echo "  !! $*" >&2; fail=1; }
