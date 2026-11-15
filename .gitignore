@@ -7,3 +7,5 @@ third_party/
 *.pyc
 __pycache__/
 !artifacts/README.md
+tools/sighash/test_unified
+rootfs/stub/kern-init

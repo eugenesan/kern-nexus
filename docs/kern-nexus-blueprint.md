@@ -1,131 +1,349 @@
-# Complete Porting Blueprint, Parity Report & Agent Specification: `kern-nexus` (LG Nexus 5)
+# kern-nexus — implementation guide and agent brief
 
-## 1. Architecture & Target Design Summary
+**Status:** working plan, 2026-11-14.  This document replaces the earlier
+`kern-nexus-blueprint.md` draft.  It is both the project overview and the
+starting prompt for a coding agent.  The standalone unified-sighash
+reference already passes all 166 embit vectors; the boot-chain bootstrap
+images are built (device verification pending).  Detailed material is
+split into:
 
-* **Target Device**: LG Nexus 5 (`hammerhead`, Qualcomm Snapdragon 800 / MSM8974, ARMv7-A Cortex-A15 + NEON HardFloat).
-* **kernel & Userspace**: Existing Linux 3.4 Android recovery kernel (`msm8974`) and ramdisk created from pre-exisitng TWRP recovery (artifacts/twrp-3.7.0_9-HH.R.17-MADV_WIPEONFORK.img) running in stateless `initramfs`. While TWRP init does mounts various filesystems we do not use that (except during developlment when it useful to deploy and test without reboot. Zero wireless/network connectivity except NFC used to communicate with JavaCards (SeedKeeper).
-* **Binary Output**: Single statically linked executable (`kern-nexus`), compiled with `-march=armv7-a -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -static` targeting the Linux `3.2.0` ABI.
-* **Storage & Transport**:
-  * **Stateless RAM Operation**: Ephemeral config/NVS mapped to `/tmp/kern_nvs` (`tmpfs`), wiped cleanly via `explicit_bzero()` on timeout/shutdown.
-  * **NFC SecureCard (Sole External I/O)**: Broadcom BCM2079x (`/dev/bcm2079x`) C NCI/ISO-7816 driver from `krux-nexus` linked directly into the binary for Satochip / Seedkeeper / TapSigner APDU communication.
-  * **Camera QR Scanner**: Reverse-engineered Qualcomm `msm` camera C service (`/dev/video*`, `/dev/media*`, `/dev/v4l-subdev*`, `/dev/ion`) from `krux-nexus` integrated as an internal `pthread` feeding 8-bit Y-plane luminance frames directly into kern's `k_quirc` decoder and LVGL preview canvas.
-  * **Display & Touch**: Linux `fbdev` (`/dev/graphics/fb0` with `FBIOPAN_DISPLAY` ioctl refresh) and `evdev` (`/dev/input/event*` for Synaptics DSX touch and GPIO volume/power keys) driven directly by LVGL v9.
-
----
-
-## 2. Bitcoin Feature Parity & XBT Unified Sighash (BLAKE2) Analysis
-
-**kern** (`odudex/kern`) achieves ~95% standard Bitcoin functional parity with **Krux** (`selfcustody/krux` / `eugenesan/krux-nexus`) in pure C (`libwally-core`, `cUR`, `k_quirc`, `LVGL v9`).
-
-| Feature Category | Krux (`krux-nexus`) | kern (`odudex/kern`) | Porting Impact for `kern-nexus` |
-| :--- | :--- | :--- | :--- |
-| **Mnemonics & Backups** | BIP-39 (12/24), SeedQR, Compact SeedQR, KEF encrypted backups, BIP-39 passphrase, BIP-85, SeedXOR, Binary Grids | BIP-39 (12/24), SeedQR, Compact SeedQR, KEF encrypted backups, BIP-39 passphrase, BIP-85 | **Full Parity** on core formats (KEF backups are cross-compatible). SeedXOR/Binary Grids omitted in kern. |
-| **Wallet Policies** | Legacy, SegWit (BIP-49/84), Taproot (BIP-86), Multisig, `wsh` Miniscript | Legacy, SegWit (BIP-49/84), Taproot (BIP-86), Multisig, **`wsh` & `tr` (Taproot) Miniscript**, **BIP-138** descriptor backups | **kern Ahead** (adds Taproot Miniscript & BIP-138 encrypted descriptor backups). |
-| **Signing (BTC)** | PSBT signing, BIP-137 message signing, partial BIP-322 | PSBT signing (`libwally-core`), BIP-137, **PSBT-based BIP-322** (SegWit & Taproot) | **kern Ahead** (faster PSBT parsing, full BIP-322). |
-| **XBT Fork Unified Sighash (BLAKE2)** | Custom **BLAKE2 unified opt-in signature hash** implemented in `eugenesan/embit` (`unified-sighash-v0.8.1`, commits `fff7ffa..de0e363`) | Standard BTC SHA256d / BIP-143 / BIP-341 sighash in `libwally-core` | **Port Required**: Port the 10-commit unified BLAKE2 sighash specification from `eugenesan/embit` (`unified-sighash-v0.8.1`) into `libwally-core` + kern. |
-| **QR Protocols** | Static QR, BC-UR (`uUR`), BBQr, Specter `pMofN` via `quirc`/`zbar` | Static QR, BC-UR (`cUR`), BBQr, Specter `pMofN` via **`k_quirc`** (~2x faster) | **Full Parity + Speed Gain** (100% compatible with Sparrow, Specter, BlueWallet, Nunchuk, Coldcard Q). |
-| **NFC SecureCards** | Satochip / Seedkeeper / TapSigner over `bcm2079x` APDUs | Not in upstream kern (uses QR + SD card) | **Port Required**: Link `krux-nexus` `bcm2079x` C driver into kern's seed loader & PSBT signer. |
-| **File / Printer I/O** | SD card + ESC/POS thermal printer | SD card (no printer) | Disable SD/file menus in `kern-nexus` to enforce stateless NFC + QR operation. |
-
-### 2.1 Porting XBT Unified Opt-In Sighash (BLAKE2) to `libwally-core`
-
-Because **XBT (BLAKE2)** uses a custom **unified opt-in signature hash** rather than standard Bitcoin SHA256d / BIP-143 / BIP-341 sighash algorithms, upstream `libwally-core` does **not** implement it out of the box. You will need to maintain a clean patchset on top of `libwally-core` mirroring the exact behavior of `eugenesan/embit` branch `unified-sighash-v0.8.1` (`git diff fff7ffa..de0e363`):
-
-1. **Cryptographic Primitive (`BLAKE2b` / `BLAKE2s`)**:
-   * Check which BLAKE2 variant (`blake2b` or `blake2s`, personalization string, and output digest length) `eugenesan/embit` (`9198d5f`) uses for the unified digest.
-   * Vendor a compact, standalone public-domain C BLAKE2 implementation (e.g., official `BLAKE2/libb2` or `rfc7693` single-file C implementation) directly into `libwally-core/src/` (or `third_party/`) so there are zero external dependencies.
-2. **Exact Semantic Invariants from `eugenesan/embit` (`fff7ffa..de0e363`)**:
-   * **Opt-In Flag & Negotiation (`9198d5f`, `270f406`, `2b1828c`)**: Preserve the exact opt-in sighash flag/bitmask negotiation so standard BTC sighashes remain untouched unless the unified opt-in is explicitly requested/negotiated.
-   * **Committed Script Type (`de0e363`)**: Determine the committed script type directly from the input's script (`scriptPubKey` / `witnessScript` / `redeemScript`), **not** inferred from which PSBT fields (`PSBT_IN_NON_WITNESS_UTXO` vs. `PSBT_IN_WITNESS_UTXO`) are populated.
-   * **Strict Input Validation (`bfa8545`, `67a79a0`)**: Reject any hash type that the XBT reference implementation rejects, fail one input at a time with clear error codes, and confine `SIGHASH_SINGLE` skip behavior strictly to the unified opt-in path.
-   * **Sibling Cache & Memory Footprint (`dc59267`, `7e4b9c1`)**: Keep the caller's own input values isolated from any shared/cached preimage digests across inputs (`prevouts` / `sequences` / `outputs` / `spent_amounts` / `scriptpubkeys`) while keeping PSBT memory overhead constant.
-3. **Target Files in `libwally-core` & `kern`**:
-   * **`libwally-core/src/psbt.c` & `src/transaction.c`**: Add `wally_tx_get_xbt_unified_signature_hash()` (or extend `wally_psbt_sign_input()` / `wally_psbt_get_input_signature_hash()`) and expose the opt-in flag in `include/wally_psbt.h` / `include/wally_transaction.h`.
-   * **Unit Test Parity (`1bd4b0a`, `2b1828c`)**: Translate every unit test vector from `eugenesan/embit` (`unified-sighash-v0.8.1`) into a C test binary (`test_xbt_sighash`) linked against your patched `libwally-core` to guarantee byte-for-byte digest parity before testing on hardware.
-   * **kern PSBT Signer & UI**: Update kern's PSBT inspection/signing flow to recognize the XBT opt-in sighash flag, display an explicit indicator on the transaction review screen when unified XBT sighash is active, and pass the flag into `libwally-core` (and/or your Satochip APDU sighash builder if signing on-card).
+| document | contents |
+|---|---|
+| [build-and-deploy.md](build-and-deploy.md) | toolchain, kernel, kern build, ramdisk/image, TWRP modes, flash/deploy |
+| [hardware.md](hardware.md) | measured device nodes, display/input/power, camera, NFC wiring |
+| [bitcoin.md](bitcoin.md) | unified opt-in sighash (corrected), SeedKeeper, Krux parity |
+| [kernel-and-wipe.md](kernel-and-wipe.md) | kernel patch set, power-off wipe, `k_run`/`k_next` |
+| [bringup-plan.md](bringup-plan.md) | ordered work, exit criteria, tests, open decisions |
 
 ---
 
-## 3. External Source Trees & Dependencies Required
+## 1. What `kern-nexus` is
 
-Beyond **`odudex/kern`**, **`eugenesan/krux-nexus`**, **`eugenesan/embit` (`unified-sighash-v0.8.1`)**, and the **Nexus 5 Linux 3.4 kernel headers/source**, the offline static CMake build requires:
+`kern-nexus` runs **kern**, a C Bitcoin signer, on the LG Nexus 5
+(`hammerhead`, MSM8974, ARMv7-A Cortex-A15) as a single statically linked
+Linux binary.  It is the C counterpart of the Krux port in `../krux-nexus`.
 
-| Dependency / Source Tree | Role in `kern-nexus` | Notes for Offline Static ARMv7 Build |
-| :--- | :--- | :--- |
-| **`lvgl` (v9.x)** | UI engine + built-in Linux `fbdev` (`LV_USE_LINUX_FBDEV`) & `evdev` (`LV_USE_EVDEV`) drivers. | Match exact v9 tag in `kern/idf_component.yml` or `kern/simulator/CMakeLists.txt`. |
-| **`libwally-core` (v1.6.1+)** | Bitcoin crypto, BIP-32/39/85, PSBT signing, Miniscript (includes `secp256k1` submodule) + **XBT unified BLAKE2 sighash patch**. | Build statically (`--enable-static --disable-shared --enable-elements=no`), disable `HAVE_GETRANDOM` for Linux 3.4. |
-| **Standalone C BLAKE2 (`blake2b` / `blake2s`)** | Cryptographic hash function for XBT unified signature hashes. | Single-file reference C implementation (`rfc7693` / `BLAKE2`) compiled into `libwally-core`. |
-| **`quirc` / `k_quirc`** | SIMD-accelerated C QR code decoder. | Included in `odudex/kern/components` (or `github.com/dlbeer/quirc`). |
-| **`qrcodegen` (Nayuki)** | C QR generator for displaying animated UR / BBQr / signed PSBTs. | Included in `odudex/kern/components` (or `github.com/nayuki/QR-Code-generator`). |
-| **Managed ESP-IDF Components** | Any C helper libraries referenced in `kern/idf_component.yml` (`cUR`, `cJSON`, etc.). | Check `kern/components/` and `idf_component.yml`; vendor locally so CMake builds 100% offline. |
-| **Linux 3.4 MSM kernel Headers** | Qualcomm UAPI headers (`msm_ion.h`, `msmb_camera.h`, `msmb_isp.h`, `bcm2079x.h`, `mdss_mdp.h`). | Extracted from your Nexus 5 Linux 3.4 kernel tree. |
-| **ARMv7 HardFloat Sysroot** | `arm-linux-gnueabihf` GCC 15.2 static toolchain (`--enable-kernel=3.2.0`). | Host cross-compiler (`libc.a`, `libpthread.a`, `libm.a`). |
+There is no Android userspace, no Python, no MicroPython, no network stack
+and no persisted seed/plaintext storage in the delivered image.  The only external
+I/O is:
 
----
+* the **BCM2079x NFC** reader for JavaCard APDUs (SeedKeeper / Satochip /
+  TapSigner);
+* the **camera** for QR codes and camera entropy;
+* the **display, touch and keys**;
+* optional **adb/UART** for development and recovery, off in the sealed
+  image.
 
-## 4. Phased Engineering Roadmap
+The target use is an air-gapped signer, not a general-purpose phone.
 
-* **Phase 1 — Offline Dependency Vendoring & Cross-Build Baseline**: Vendor all external components (`lvgl`, `libwally-core`, BLAKE2 C source, etc.), configure `nexus5-armhf.cmake` (`-march=armv7-a -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -static`), disable `HAVE_GETRANDOM` for Linux 3.4, and verify a static `3.2.0` ABI binary.
-* **Phase 2 — Port XBT Unified Sighash (BLAKE2) to `libwally-core` & Verify Vectors**: Extract `git diff fff7ffa..de0e363` from `eugenesan/embit`, implement the BLAKE2 unified opt-in digest in `libwally-core`, and run an automated C unit-test suite verifying 100% byte-for-byte parity with `embit`'s test vectors.
-* **Phase 3 — Display (`fbdev`) & Input (`evdev`) Bring-Up**: Replace SDL2 in `kern/simulator/` with LVGL `LV_USE_LINUX_FBDEV` (`/dev/graphics/fb0` + `FBIOPAN_DISPLAY` ioctl from `krux-nexus`) and `LV_USE_EVDEV` (Synaptics DSX touch + GPIO keys auto-detected via `EVIOCGNAME`), and tune DPI scaling for `1080x1920`.
-* **Phase 4 — Camera Service Thread Integration**: Link `krux-nexus`'s reverse-engineered Qualcomm MSM camera C code (`/dev/video*`, `/dev/ion`) directly into `kern-nexus` as an internal `pthread` controlled by `camera_start()`/`camera_stop()`, feeding 8-bit Y-plane frames to `k_quirc` and LVGL's preview canvas.
-* **Phase 5 — NFC SecureCard Driver, Stateless Hardening & `initramfs` Packaging**:
-  * Link `krux-nexus`'s Broadcom `/dev/bcm2079x` C driver and wire ISO-7816 APDU flows for encrypted seed loading (Seedkeeper / KEF-over-NFC) and on-card sighash signing (Satochip / TapSigner).
-  * Route NVS to `/tmp/kern_nvs` (`tmpfs`), hide SD/file UI menus, enforce `explicit_bzero()` memory wiping, wire sysfs backlight/battery/poweroff, strip binary, and pack into recovery `initramfs`.
+## 2. Source layout
 
----
-
-## 5. Prompt for Local Coding Agent
-
-Copy and paste the prompt below into your local coding agent (Claude Code, Cursor, Aider, or Cline) inside your workspace:
-
-```markdown
-# Task: Port `odudex/kern` to LG Nexus 5 (`kern-nexus`) with XBT Unified Sighash (BLAKE2) Support
-
-## Workspace Layout
-You are working in a workspace containing:
-1. `./kern/` — Upstream `odudex/kern` (pure C + LVGL v9 + `libwally-core` + `k_quirc` + `cUR` air-gapped Bitcoin signer).
-2. `../krux-nexus/` — Working reference port of Krux for the LG Nexus 5 (`hammerhead`, MSM8974, Linux 3.4 Android recovery kernel without Android userspace).
-3. `./embit/` — Fork `eugenesan/embit` checked out on branch `unified-sighash-v0.8.1` (commits `fff7ffa..de0e363`), implementing the unified BLAKE2 opt-in signature hash for XBT.
-4. `./kernel-headers/` — Linux 3.4 UAPI and Qualcomm MSM kernel headers (`msm_ion.h`, `msmb_camera.h`, `msmb_isp.h`, `bcm2079x.h`).
-
-## Architectural Requirements (Strict)
-1. **Single Static Executable**: Build a single static binary (`kern-nexus`) using `arm-linux-gnueabihf-gcc` with flags:
-   `-march=armv7-a -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -O2 -D_DEFAULT_SOURCE -static -Wl,--gc-sections`
-   targeting the Linux `3.2.0` ABI. No Python, no SDL2, no dynamic `.so` dependencies.
-2. **Linux 3.4 Compatibility**: Ensure `HAVE_GETRANDOM` is disabled in `libwally-core` and all dependencies so entropy reads directly from `/dev/urandom` without calling the `getrandom()` syscall (unsupported on Linux 3.4).
-3. **Port XBT Unified Opt-In Sighash (BLAKE2) to `libwally-core` & kern**:
-   - Inspect `git diff fff7ffa..de0e363` in `./embit/` (`unified-sighash-v0.8.1`) to extract the exact BLAKE2 unified opt-in signature hash specification, negotiation rules, and unit tests.
-   - Add a standalone C BLAKE2 implementation and port the unified sighash logic into `libwally-core` (`src/psbt.c`, `src/transaction.c`) preserving all invariants from `./embit/`:
-     * Derive committed script type strictly from the script itself (`de0e363`), never from which PSBT UTXO fields are populated.
-     * Keep caller-specific input values out of any shared sibling digest cache (`dc59267`) and maintain constant PSBT memory overhead (`7e4b9c1`).
-     * Reject unsupported hash types per-input (`bfa8545`) and confine `SIGHASH_SINGLE` skip behavior strictly to the unified opt-in (`67a79a0`).
-   - Build and run a C unit-test binary (`test_xbt_sighash`) against all test vectors from `./embit/` (`1bd4b0a`, `2b1828c`) to verify byte-for-byte digest parity.
-   - Update `./kern/`'s PSBT inspection/signing UI to support and display the XBT unified opt-in sighash flag.
-4. **Stateless / Air-Gapped Operation**:
-   - Zero network stack or wireless interfaces.
-   - Zero persistent eMMC storage: map kern's simulator NVS/storage shim to `/tmp/kern_nvs` (`tmpfs`) and remove/hide SD-card and file-browser UI options.
-   - Wipe all sensitive buffers (mnemonics, PINs, APDU session keys, decrypted PSBTs) using `explicit_bzero()`.
-5. **Display (`fbdev`) & Touch (`evdev`)**:
-   - Replace SDL2 in `kern/simulator/` with LVGL v9's built-in `LV_USE_LINUX_FBDEV` and `LV_USE_EVDEV` drivers (`LV_COLOR_DEPTH 32`).
-   - Open `/dev/graphics/fb0` (`1080x1920`) and port the `FBIOPAN_DISPLAY` ioctl refresh mechanism from `../krux-nexus/` into LVGL's display flush path so Qualcomm `mdss_fb` updates reliably.
-   - Auto-detect the Synaptics DSX touchscreen and GPIO key `/dev/input/event*` nodes by device name via `EVIOCGNAME`.
-   - Adjust DPI/font scaling constants so kern's LVGL UI renders cleanly on a 5-inch `1080x1920` display.
-6. **Integrated Camera Service Thread**:
-   - Port the reverse-engineered Qualcomm MSM camera C driver (`/dev/video*`, `/dev/media*`, `/dev/v4l-subdev*`, `/dev/ion`) from `../krux-nexus/` directly into `kern-nexus` as an internal `pthread` (not a separate daemon).
-   - Start/stop the sensor thread cleanly from kern's `camera_start()` / `camera_stop()` hooks and feed 8-bit Y-plane luminance frames directly into kern's `k_quirc` QR decoder and LVGL preview canvas.
-7. **Integrated NFC SecureCard Driver (`bcm2079x`)**:
-   - Port the Broadcom BCM2079x (`/dev/bcm2079x`) C NCI / ISO-7816 driver from `../krux-nexus/` directly into `kern-nexus`.
-   - Expose a C APDU transceive API and wire it into kern's Bitcoin workflows for both encrypted seed loading (Seedkeeper / KEF-over-NFC) and on-card sighash signing (Satochip / TapSigner, passing the unified XBT sighash digest when active).
-8. **System Controls**:
-   - Wire backlight brightness to `/sys/class/leds/lcd-backlight/brightness`, battery gauge to `/sys/class/power_supply/battery/capacity`, and clean power-off to `reboot(LINUX_REBOOT_CMD_POWER_OFF)`.
-
-## Step-by-Step Execution Plan
-- **Step 1**: Audit `./kern/simulator/CMakeLists.txt`, `./kern/components/`, `../krux-nexus/`, and run `git diff fff7ffa..de0e363` in `./embit/` to document the exact XBT BLAKE2 unified sighash specification and hardware file mappings. Generate the `ports/nexus5/` CMake scaffold and `nexus5-armhf.cmake` toolchain file.
-- **Step 2**: Port the XBT BLAKE2 unified sighash into `libwally-core` and validate against all `./embit/` unit test vectors via `test_xbt_sighash`.
-- **Step 3**: Implement the `fbdev` (`FBIOPAN_DISPLAY`) + `evdev` display/touch HAL and verify a clean static cross-compile.
-- **Step 4**: Integrate the `../krux-nexus/` C camera service as a `pthread` wired to `k_quirc` and the LVGL viewfinder.
-- **Step 5**: Integrate the `bcm2079x` NFC APDU driver, wire kern's XBT sighash PSBT UI/signing flow, and connect sysfs battery/backlight/poweroff hooks.
-
-Begin with **Step 1**: inspect all repositories, summarize the exact `git diff fff7ffa..de0e363` changes from `./embit/`, report the hardware file mappings, and scaffold `ports/nexus5/`.
 ```
+kern-nexus/
+  kern/                 upstream kern (C, LVGL, libwally-core, cUR, k_quirc)
+  ports/nexus5/         the Linux/ARM port layer and CMake project
+  components/           ported camera and NFC components (C)
+  rootfs/               init stub, ramdisk builder, boot-image packer
+  scripts/              build, image and deploy wrappers
+  tools/                kernel profiles/build helper, host serial helper
+  linux/                kernel patch series, profiles, build notes
+  artifacts/            TWRP template and generated images (gitignored)
+  docs/                 this guide and the detail documents
+```
+
+`kern/` is a nested git checkout, not a copy.  Keep port changes in
+`ports/`, `components/` and `rootfs/` where possible; changes inside
+`kern/` must be small and maintainable as patches or a branch.
+
+## 3. Boot and delivery architecture
+
+The delivered image is written to the **recovery** partition
+(`/dev/block/mmcblk0p20`) and started from the bootloader.  **Never flash
+`boot`.**  The boot partition stays untouched, so the phone can always be
+returned to Android/recovery.
+
+The image is TWRP 3.7.0's ramdisk plus:
+
+* TWRP binary renamed to `/sbin/recovery.stock`;
+* a symlink `/sbin/recovery -> recovery.stock` (TWRP's sideload child
+  hardcodes that path);
+* `/sbin/kern-init`, the init stub, installed as the `kern` service;
+* a disabled `kern-firmware` service for `start-kern`;
+* `/sbin/start-kern`, `/sbin/start-adb`, `/sbin/start-serial`;
+* `/system/bin/sh -> /sbin/sh`, because TWRP's `system()` needs it;
+* the kern binary and its assets in `/opt/kern` (standard image), or the
+  development copy in `/data/kern` (development image);
+* the camera CPP firmware in `/lib/firmware`.
+
+TWRP's init remains PID 1, so mounts and USB come up normally.  The stub
+decides which payload runs:
+
+| image | plain boot | volume-up | from TWRP/adb |
+|---|---|---|---|
+| **standard** (shipped) | TWRP, adb **off** | kern | `start-kern` |
+| **development** | kern | TWRP | `start-kern` / deploy |
+
+The **sealed** build (`KERN_SEAL=1`) hides `/sbin/adbd` as
+`/sbin/adbd.off` in every stub path.  `start-adb` restores it;
+`start-serial` gives a root shell on `ttyHSL0` (115200 8N1), which is the
+fallback when adb is unavailable.
+
+`start-kern` must **stop TWRP and wait for the `recovery` process to
+disappear** before starting kern.  `ctl.stop` is asynchronous; starting the
+payload too early leaves TWRP and kern sharing the panel.  TWRP's sideload
+needs adbd **off**; use Advanced → ADB Sideload from a fresh boot, not
+`start-adb`.
+
+The image is **gzip**; the stock bootloader only unpacks gzip for a
+partitioned image.  XZ is allowed only on the `fastboot boot` path.
+The kernel is `zImage-dtb`; a plain `zImage` has no DTB and will not boot.
+Full procedure: [build-and-deploy.md](build-and-deploy.md).
+
+## 4. Port architecture
+
+`ports/nexus5/` builds the same kern application sources as the simulator,
+with a different platform layer:
+
+| kern dependency | ESP32-P4 implementation | nexus5 implementation |
+|---|---|---|
+| display | LCD panel + LVGL port | LVGL `LV_USE_LINUX_FBDEV` on `/dev/graphics/fb0`, plus the MSM pan/commit path |
+| touch/keys | GT911/FT5x06 + GPIO | LVGL `LV_USE_EVDEV`; `/dev/input/event1` touch, `event2` keys |
+| camera | `esp_video` + PPA | `components/camera` (MSM V4L2/ION/CPP) as an internal pthread |
+| NFC | none | `components/nfc` (BCM2079x NCI/ISO-DEP/APDU) |
+| NVS/flash | ESP NVS/SPIFFS | `/data/kern/nvs`, `/data/kern/flash` (same policy as Krux) |
+| FreeRTOS | ESP-IDF | `pthread` shims (the simulator's `esp_idf_stubs`) |
+| power/battery | PMIC/BSP | sysfs: backlight, battery, charger, `reboot(2)` |
+| update | ESP OTA | disabled; the image is replaced through recovery |
+| network | ESP32-C6 (held in reset) | none; kernel built without Wi-Fi/BT/cellular |
+
+The simulator's `simulator/platform/esp_idf_stubs/` is the reference for
+FreeRTOS/NVS/ESP API shims.  Copy only the pieces the target needs.  Do not
+link SDL2, ESP-IDF, the ESP `video`/`sd_card`/BSP components, or any
+network stack into the target.
+
+Build a **single static binary** with `arm-linux-gnueabihf-gcc`, hard-float,
+ARMv7-A/NEON, Linux 3.2 ABI (`-static -pthread`).  Disable
+`HAVE_GETRANDOM` in libwally-core: the 3.4 kernel has no `getrandom(2)`.
+`kern_wally.c` already installs the secure allocator; keep it.
+
+The port layer must provide the interfaces in `main/CMakeLists.txt`:
+`bsp_display_*`, `bsp_pmic_*`, `bsp_i2c_*`, `app_video_*`, `esp_*`,
+FreeRTOS, NVS, SPIFFS-like storage, `sd_card` (or a stubbed, hidden
+implementation).  See [hardware.md](hardware.md) for the exact nodes and
+[build-and-deploy.md](build-and-deploy.md) for the CMake/toolchain setup.
+
+## 5. Hardware map (measured; details in hardware.md)
+
+| resource | path / value |
+|---|---|
+| display | `/dev/graphics/fb0`, 1080×1920, 32 bpp, **stride 4352**, triple-buffered |
+| display refresh | `FBIOPAN_DISPLAY` + MSM `MSMFB_DISPLAY_COMMIT` |
+| touch | `/dev/input/event1`, `ABS_MT_*`, X 0–1079, Y 0–1919 |
+| keys | `/dev/input/event2` (`KEY_VOLUMEUP`, `KEY_VOLUMEDOWN`, `KEY_POWER`) |
+| backlight | `/sys/class/backlight/lm3630/brightness` (max in `max_brightness`) |
+| battery/charger | `/sys/class/power_supply/battery`, `.../usb`, `.../ac` |
+| camera | `/dev/video*`, `/dev/v4l-subdev*`, `/dev/ion` |
+| NFC | `/dev/bcm2079x` (I2C 0x77, BCM20793M), ioctls `0xFA01`–`0xFA07` |
+| UART | `ttyHSL0`, 115200 8N1, host `/dev/ttyUSB0` |
+| recovery partition | `/dev/block/mmcblk0p20` |
+| system/cache/userdata | `mmcblk0p25`, `p27`, `p28` |
+
+## 6. Camera (details in hardware.md and components/camera)
+
+The camera is not a Python daemon.  It is a C component started as a
+**pthread** by the port layer and exposed through the `app_video_*`
+functions kern already calls:
+
+```c
+esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored);
+esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core);
+esp_err_t app_video_stop(void);
+bool app_video_is_ready(void);
+bool app_video_is_streaming(void);
+```
+
+The camera keeps Krux's geometry (binned **720×960** default; **960×1280**
+full/PIX) and YUV420.  `scanner.c` currently expects RGB565 and uses the
+P4 PPA; the Nexus 5 has no PPA, so add a `KERN_NEXUS` path that crops/scales
+the Y plane on the CPU (or a software PPA shim).  Do not change the sensor
+geometry just to satisfy 800×800.
+
+The source is `../krux-nexus/cam/camd.c` (4,758 lines) plus its headers and
+`cam/fw/cpp_firmware_v1_2_0.fw`.  Refactor `main()` into
+`kern_camera_init/start/stop`, remove the Unix socket and supervisor
+process, and keep the frame path.  The CPP firmware is 16 KB and must be
+staged into `/lib/firmware`; never copy a file onto itself with `O_TRUNC`.
+The kernel loads it through `request_firmware`/the MSM CPP driver.
+
+Keep the stream continuous; long pauses and restarts while streaming are
+the fragile path.  Keep the AE/AF controls and the QR/entropy target
+semantics from camd.  See [hardware.md](hardware.md#camera).
+
+## 7. NFC and SeedKeeper (details in hardware.md and bitcoin.md)
+
+The BCM2079x transport is seven ioctls on `/dev/bcm2079x`; the chip speaks
+NCI.  The kernel driver delivers **one whole framed packet per read()**:
+
+```
+byte 0   HCIT type 0x10 (NFC)
+byte 1   MT | PBF | GID
+byte 2   OID
+byte 3   payload length
+byte 4+  payload
+```
+
+The bring-up sequence and the vendor's exact `SET_CONFIG` payloads are in
+`../krux-nexus/krux/src/nfc.py` and `docs/nfc-transport.md`.  Port that
+sequence to C; the Python file is the protocol reference, not a runtime
+dependency.  The chip's firmware is already in place; the `.ncd` blobs are
+kept only for recovery/reference.
+
+`SeedKeeper` is a JavaCard applet.  Port `krux/src/krux/seedkeeper.py` (plain
+APDUs, PIN, secret headers, import/export) and, if required,
+`seedkeeper_sc.py` (secure channel).  The secure channel uses secp256k1
+ECDH, HMAC-SHA1, AES-128-CBC; libwally-core and mbedTLS provide those.
+Keep the AID, status words and wire formats byte-compatible with
+SeedSigner/SeedKeeper.  Details and test plan: [bitcoin.md](bitcoin.md).
+
+## 8. Unified opt-in sighash — corrected specification
+
+The unified opt-in is an **additional** mechanism, not a replacement for
+SHA256.  Standard Bitcoin keeps SHA256d/BIP143/BIP341.  XBT ("blake2b
+Bitcoin") changes the **block header / proof of work** to BLAKE2b and
+activates the unified sighash at the same buried deployment
+(`Blake2bHeight`); the unified signature hash itself is still
+`TaggedHash("UnifiedSighash", ...)` with SHA256.
+
+Both block structures and both signing paths coexist.  The SeedSigner fork
+(`/home/user/Develop/src/krux-mobile/seedsigner`, branch
+`privkeio/unified-sighash`, embit pin `5f700aa`) is the clean reference: it
+has the 166 vectors, Knots interop, CVE-2020-14199 and the full UI flow.
+Re-port from there rather than carrying the Krux patch forward.
+
+The reference implementations are:
+
+* `krux/vendor/embit` branch `unified-sighash-v0.8.1`, commits
+  `fff7ffa..de0e363`;
+* `krux/src/krux/sighash.py` (Krux's selection/validation UI policy);
+* `krux/vendor/embit/tests/tests/data/unified_sighash.json` and
+  `test_unified_sighash*.py` (vectors and negotiation tests).
+
+Port it into `libwally-core` as a transaction/PSBT API, add a C vector test,
+then wire kern's PSBT review/signing to show and use the opt-in.  The full
+message layout, validation rules, cache invariants and libwally design are
+in [bitcoin.md](bitcoin.md).  This is the highest-risk work: get the vectors
+byte-identical before touching hardware.
+
+## 9. Kernel and memory wipe
+
+The kernel is the same hammerhead 3.4 CAF fork used by `krux-nexus`, branch
+`airgap/cam-xz-wipe`.  The patch series in `linux/patches/` carries the
+camera/CPP fixes, XZ kernel/ramdisk support, USB gadget/adb fixes and the
+kernel-only power-off wipe.  Build it with `lineageos_hammerhead_defconfig`
+and the air-gap profile; use `zImage-dtb`.
+
+The wipe is **kernel and RAM only**:
+
+1. `sys_reboot(LINUX_REBOOT_CMD_POWER_OFF)` writes a magic/CRC marker at
+   `0x100F0000` in the persistent-RAM tail and restarts with reason
+   `recovery` (IMEM `0x77665502`).
+2. The next boot sees the marker at `mem_init()`, wipes every free page,
+   and powers off from `kernel_init()` before userspace starts.
+3. The marker is cleared at that power-off.  There is no NAND/BCB write.
+
+For kern-nexus this has two layers:
+
+* **`k_run`** — the running kern process: `explicit_bzero()` its heap,
+  framebuffer/scanout, camera buffers and NFC/APDU buffers before requesting
+  power-off.  The kernel's free-page wipe does not cover reserved memory.
+* **`k_next`** — the next boot's early kernel: the marker-driven free-page
+  wipe described above, before any userspace exists.
+
+If `k_run`/`k_next` are meant as two separate binaries or boot slots rather
+than these two phases, say so and this section will be renamed.  Full
+design, limits and recovery caveats: [kernel-and-wipe.md](kernel-and-wipe.md).
+
+**Bootloop caveat:** after a wipe the charger or a normal power-on boots the
+**boot partition**.  If Android there is broken (`/system/bin/init`
+missing), the phone bootloops in Android, not in this firmware.  Enter the
+bootloader (Volume Down + Power), select Recovery, or repair Android.
+
+## 10. Ordered work
+
+1. **Make the port configure and link** with the simulator stubs, then
+   replace display/input with fbdev/evdev.  Exit: a static ARM binary that
+   draws kern's UI.
+2. **Integrate the camera pthread** and prove `k_quirc` decodes a QR.
+3. **Port the unified sighash into libwally** and pass all embit vectors.
+4. **Integrate NFC transport**, then SeedKeeper plaintext flows, then the
+   secure channel.
+5. **Storage and wipe**: settings/PIN in `/data/kern`, explicit zeroing of
+   secrets, kernel marker wipe (unchanged; build flags for dev).
+6. **TWRP ramdisk/image**, standard/sealed modes, start scripts and seal.
+7. **Hardening**: no radios, no SD menus, no update path, `security-check`.
+
+Exit criteria and test commands: [bringup-plan.md](bringup-plan.md).
+
+## 11. Open decisions / things missing from the first draft
+
+These need an explicit answer before the affected work is final:
+
+1. **`k_run`/`k_next` — resolved:** they are the kernel's live/next-boot
+   phases.  The kernel wipe is self-contained; use `KERN_RELEASE`/`KERN_SEAL`
+   for development.
+2. **PIN/settings — resolved:** use `/data/kern` as Krux does.  Keep the
+   PIN verifier and settings there; do not put seeds or plaintext secrets on
+   eMMC.  The Nexus 5 has no ESP eFuse HMAC: replace
+   `efuse_hmac_sim.c`'s fixed test key with a per-device random salt stored
+   in `/data/kern` (or a kernel-provided secret), and keep the same PIN
+   verifier format.
+3. **mbedTLS** — kern uses mbedTLS (`mbedtls`, `mbedcrypto`, `mbedx509`) and
+   PSA headers in `crypto_utils`, `pin` and `kef`.  ESP-IDF supplies it on
+   the P4; the Linux target needs a pinned ARM static build
+   (`scripts/build-mbedtls.sh`).
+4. **LVGL vendoring** — the simulator uses `FetchContent` (network).  The
+   offline target must vendor LVGL 9.5 or use a pinned local tree.
+5. **libwally pin** — `components/libwally-core/upstream` is the fork.  Keep
+   a tag for every pin; record it in `dependencies.lock`/README.
+6. **KernelSU** — the Krux kernel branch contains KernelSU.  kern-nexus does
+   not need it (TWRP/kern run as root).  The patch series excludes it; do
+   not enable it unless there is a reason.
+7. **Camera format — resolved:** keep Krux's 720×960 / 960×1280 YUV420;
+   scale/crop only if a hard scanner assert appears.
+8. **Storage menus** — the blueprint says disable SD/file menus.  They are
+   still compiled into kern; either compile them out or make the storage
+   shim return "unavailable" and hide the menu entries.
+9. **Sideload / Android** — the recovery image deliberately leaves `boot`
+   and Android alone.  If Android is broken, normal boot loops; document
+   the recovery-key procedure.
+10. **Secure boot / signing** — kern's ESP32 secure boot does not apply.
+    Decide whether the Linux binary gets any signature/verification at all
+    (the kernel/bootloader path does not verify it in this design).
+11. **XBT / BLAKE2b** — the SeedSigner reference is available; the
+    remaining work is BLAKE2b block-header support (not a second signature
+    digest) and the XBT network/activation rules.
+
+## 12. Prompt for the coding agent
+
+> Work in `kern-nexus`.  The target is the LG Nexus 5 (`hammerhead`,
+> MSM8974), Linux 3.4, ARMv7 hard-float, single static binary.  `kern/` is
+> upstream C; `../krux-nexus/` is the working Linux port of Krux.  Read
+> `docs/kern-nexus-blueprint.md` and its detail documents first.
+>
+> Start with the buildable port: `ports/nexus5/` CMake, the simulator's
+> ESP-IDF/FreeRTOS stubs, LVGL fbdev/evdev, and the BSP/`app_video_*`
+> shims.  Do not link SDL2 or ESP-IDF.  Then integrate the camera pthread
+> from `components/camera`, then the NFC transport, then the unified
+> sighash in libwally.
+>
+> Never flash `boot`.  Dev images use `fastboot boot`; the delivered image
+> goes to `recovery`.  Keep adb off in the sealed image.  Do not add a
+> network stack, Wi-Fi, Bluetooth or cellular code.  Preserve SeedKeeper
+> wire compatibility.
+>
+> Standard Bitcoin keeps SHA256.  XBT changes the block/PoW to BLAKE2b but
+> keeps the tagged-SHA256 unified signature hash.  Validate the 166 vectors
+> first, then the XBT block/activation rules.
+>
+> For every ported component, record the source commit and the deviations
+> in `components/<name>/README.md`.  Copy only what the target needs.
