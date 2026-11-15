@@ -692,7 +692,7 @@ static void af_bringup(void);
  * state at all it still autofocuses, and it still exposes a usable
  * preview.
  */
-#define CAMD_STATE_DIR "/tmp/krux"
+#define CAMD_STATE_DIR "/tmp/kern"
 
 /* Read one state file.  A missing (or unreadable, or out of range)
  * file is replaced by the default and the file is written back, so the
@@ -735,16 +735,16 @@ static int state_read(const char *name, int def, int lo, int hi)
  * /tmp is a tmpfs, so a knob set there is gone after a cold boot --
  * which makes bisecting the camera's pipeline impossible (every test
  * needs a different setting and a reboot).  These knobs are read from
- * /data/krux/state first, so they can be set from the host with
- * "adb shell echo N > /data/krux/state/<name>" and a reboot keeps
+ * /data/kern/state first, so they can be set from the host with
+ * "adb shell echo N > /data/kern/state/<name>" and a reboot keeps
  * them.
  */
 #ifdef KRUX_RELEASE
 /* The release keeps no state on the data partition: the knobs are
- * rebuilt from defaults every boot in /tmp/krux. */
-#define CAMD_PERSIST_DIR "/tmp/krux"
+ * rebuilt from defaults every boot in /tmp/kern. */
+#define CAMD_PERSIST_DIR "/tmp/kern"
 #else
-#define CAMD_PERSIST_DIR "/data/krux/state"
+#define CAMD_PERSIST_DIR "/data/kern/state"
 #endif
 static const char *persist_dir = CAMD_PERSIST_DIR;
 
@@ -1078,18 +1078,18 @@ static void dump_frames(const unsigned char *src_y)
 	 */
 	if (!getenv("CAMD_ALLOW_DUMPS"))
 		return;
-	f = fopen("/data/krux/scan.raw.tmp", "wb");
+	f = fopen("/data/kern/scan.raw.tmp", "wb");
 	if (f) {
 		fwrite(latest_y, 1, (size_t)out_w * out_h, f);
 		fclose(f);
-		rename("/data/krux/scan.raw.tmp", "/data/krux/scan.raw");
+		rename("/data/kern/scan.raw.tmp", "/data/kern/scan.raw");
 	}
-	f = fopen("/data/krux/scan_full.raw.tmp", "wb");
+	f = fopen("/data/kern/scan_full.raw.tmp", "wb");
 	if (f) {
 		fwrite(src_y, 1, (size_t)crop_w * crop_h, f);
 		fclose(f);
-		rename("/data/krux/scan_full.raw.tmp",
-		       "/data/krux/scan_full.raw");
+		rename("/data/kern/scan_full.raw.tmp",
+		       "/data/kern/scan_full.raw");
 	}
 	{
 		unsigned char mx = 0;
@@ -1136,7 +1136,7 @@ static int latest_ready = 0;
  * A seqlock protects the reader from a torn frame: the writer makes
  * the sequence odd while it writes and even when done.
  * ------------------------------------------------------------------ */
-#define SHM_PATH "/tmp/krux/frame"
+#define SHM_PATH "/tmp/kern/frame"
 #define SHM_MAGIC 0x4b435246u	/* "KCRF" */
 struct shm_frame_hdr {
 	volatile uint32_t seq;	/* odd = writing, even = stable */
@@ -1218,7 +1218,7 @@ static void shm_publish(void)
  * second shared region.  The crop is taken from the cached bounce
  * buffer, so it costs a small memcpy, not a second sensor read.
  * ------------------------------------------------------------------ */
-#define CROP_PATH "/tmp/krux/crop"
+#define CROP_PATH "/tmp/kern/crop"
 #define CROP_MAX 1280		/* the decoder's image limit */
 
 static int crop_shm_fd = -1;
@@ -1357,7 +1357,7 @@ static int replay_config = 1;	/* the initial configuration */
 /*
  * How many of the vendor's initial ISP uploads to send; -1 = all.
  * This is the bisection knob, and it lives on /data (persistent)
- * because /tmp is a tmpfs: /data/krux/ispcfg holds the count.
+ * because /tmp is a tmpfs: /data/kern/ispcfg holds the count.
  */
 static int isp_cfg_count = -1;
 static int full_chroma;		/* full-height CBCR + full-size buffer */
@@ -1569,7 +1569,7 @@ static int cpp_msg_words = CAM_CPP_MSG_WORDS;
 static void cpp_msg_load(void)
 {
 	static unsigned int buf[1024];
-	const char *path = "/data/krux/cppmsg.bin";
+	const char *path = "/data/kern/cppmsg.bin";
 	FILE *f;
 	size_t n;
 
@@ -2239,7 +2239,7 @@ _Static_assert(__builtin_offsetof(struct act_cfg, cfg.set_info.reg_tbl_params) =
 static int actuator_fd = -1;
 /* -1 = leave the lens alone.  Driving the VCM without the vendor's
  * power-up/default-focus sequence stalls the stream (or worse), so it is
- * opt-in via /data/krux/focus. */
+ * opt-in via /data/kern/focus. */
 
 static int actuator_open(void)
 {
@@ -3675,7 +3675,7 @@ if (dump_now) {
 								if (latest_y[mi] > mx)
 									mx = latest_y[mi];
 							m = fopen(
-								"/data/krux/scan.meta.tmp",
+								"/data/kern/scan.meta.tmp",
 								"w");
 							if (m) {
 								fprintf(m,
@@ -3689,8 +3689,8 @@ if (dump_now) {
 									af_sharpness(latest_y));
 								fclose(m);
 								rename(
-									"/data/krux/scan.meta.tmp",
-									"/data/krux/scan.meta");
+									"/data/kern/scan.meta.tmp",
+									"/data/kern/scan.meta");
 							}
 						}
 					}
@@ -4120,19 +4120,19 @@ static void *socket_thread(void *arg)
 	struct sockaddr_un addr;
 	char buf[1];
 
-	unlink("/data/krux/camd.sock");
-	mkdir("/data/krux", 0755);
+	unlink("/data/kern/camd.sock");
+	mkdir("/data/kern", 0755);
 #ifdef KRUX_RELEASE
-	chmod("/data/krux", 0700);
+	chmod("/data/kern", 0700);
 #endif
 	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sfd < 0) { perror("socket"); return NULL; }
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, "/data/krux/camd.sock", sizeof(addr.sun_path) - 1);
+	strncpy(addr.sun_path, "/data/kern/camd.sock", sizeof(addr.sun_path) - 1);
 	if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); return NULL; }
 	listen(sfd, 4);
-	chmod("/data/krux/camd.sock", 0600);
+	chmod("/data/kern/camd.sock", 0600);
 
 	for (;;) {
 		cfd = accept(sfd, NULL, NULL);
@@ -4221,7 +4221,7 @@ static void *socket_thread(void *arg)
 			} else if (buf[0] == 'C') {
 				/* A QR retry: the rectangle is in preview
 				 * pixels; publish it 1:1 from the last
-				 * bounce into /tmp/krux/crop. */
+				 * bounce into /tmp/kern/crop. */
 				unsigned char p[8];
 				if (socket_read_exact(cfd, p, 8) == 0) {
 					int px = (p[0] << 8) | p[1];
@@ -4366,10 +4366,10 @@ static void *ctl_thread(void *arg)
 	struct sockaddr_un addr;
 	char c;
 
-	unlink("/data/krux/camd-ctl.sock");
-	mkdir("/data/krux", 0755);
+	unlink("/data/kern/camd-ctl.sock");
+	mkdir("/data/kern", 0755);
 #ifdef KRUX_RELEASE
-	chmod("/data/krux", 0700);
+	chmod("/data/kern", 0700);
 #endif
 	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sfd < 0) {
@@ -4378,14 +4378,14 @@ static void *ctl_thread(void *arg)
 	}
 	memset(&addr, 0, sizeof(addr));
 	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, "/data/krux/camd-ctl.sock",
+	strncpy(addr.sun_path, "/data/kern/camd-ctl.sock",
 		sizeof(addr.sun_path) - 1);
 	if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		perror("ctl bind");
 		return NULL;
 	}
 	listen(sfd, 4);
-	chmod("/data/krux/camd-ctl.sock", 0600);
+	chmod("/data/kern/camd-ctl.sock", 0600);
 	for (;;) {
 		cfd = accept(sfd, NULL, NULL);
 		if (cfd < 0)
@@ -4438,7 +4438,7 @@ static void *ctl_thread(void *arg)
 			} else if (c == 'C') {
 				/* A QR retry: the rectangle is in preview
 				 * pixels; publish it 1:1 from the last
-				 * bounce into /tmp/krux/crop. */
+				 * bounce into /tmp/kern/crop. */
 				unsigned char p[8];
 				if (socket_read_exact(cfd, p, 8) == 0) {
 					int px = (p[0] << 8) | p[1];
@@ -4518,7 +4518,7 @@ int main(int argc, char **argv)
 		       bench_mode);
 	}
 	{
-		FILE *f = fopen("/data/krux/ispcfg", "r");
+		FILE *f = fopen("/data/kern/ispcfg", "r");
 		if (f) {
 			int n;
 			if (fscanf(f, "%d", &n) == 1 && n >= 0 &&

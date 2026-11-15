@@ -93,14 +93,12 @@ static int open_fb(void) {
   struct fb_fix_screeninfo fix;
   if (ioctl(s_fb_fd, FBIOGET_FSCREENINFO, &fix) == 0) {
     s_fb_size = fix.smem_len ? fix.smem_len : (size_t)fix.line_length * 1920;
+    /* Keep the fd even if our private mapping fails: the panel commit
+     * only needs the fd, and LVGL maps the framebuffer itself. */
     s_fb_map = mmap(NULL, s_fb_size, PROT_READ | PROT_WRITE, MAP_SHARED,
                     s_fb_fd, 0);
-    if (s_fb_map == MAP_FAILED) {
+    if (s_fb_map == MAP_FAILED)
       s_fb_map = NULL;
-      close(s_fb_fd);
-      s_fb_fd = -1;
-      return -1;
-    }
   }
   return 0;
 }
@@ -118,8 +116,18 @@ static void panel_commit(void) {
   dc.var.yoffset = var.yoffset;
   dc.var.xres = var.xres;
   dc.var.yres = var.yres;
-  ioctl(s_fb_fd, MSMFB_DISPLAY_COMMIT, &dc);
-  ioctl(s_fb_fd, FBIOPAN_DISPLAY, &var);
+  int crc = ioctl(s_fb_fd, MSMFB_DISPLAY_COMMIT, &dc);
+  int prc = ioctl(s_fb_fd, FBIOPAN_DISPLAY, &var);
+  static int logged;
+  if (!logged || crc < 0 || prc < 0) {
+    int k = open("/dev/kmsg", O_WRONLY);
+    if (k >= 0) {
+      dprintf(k, "kern-nexus: commit rc=%d/%d yoff=%u xres=%u yres=%u\n",
+              crc, prc, var.yoffset, var.xres, var.yres);
+      close(k);
+    }
+    logged = 1;
+  }
 }
 
 /* ---------- lvgl_port API ---------- */

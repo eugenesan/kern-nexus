@@ -94,6 +94,13 @@ if [ "$BUNDLE" = "1" ]; then
   mkdir -p "$BUNDLE_DIR"
   cp "$KERN_BIN" "$BUNDLE_DIR/kern-nexus"
   chmod 755 "$BUNDLE_DIR/kern-nexus"
+  CAMD_BIN=${CAMD_BIN:-$ROOT/artifacts/built/camd}
+  if [ -x "$CAMD_BIN" ]; then
+    cp "$CAMD_BIN" "$BUNDLE_DIR/camd"
+    chmod 755 "$BUNDLE_DIR/camd"
+  else
+    echo "  !! no camd at $CAMD_BIN -- the camera will not start" >&2
+  fi
   cp "$CPP_FW" "$BUNDLE_DIR/cpp_firmware_v1_2_0.fw"
   echo "  bundled kern: $BUNDLE_DIR"
 fi

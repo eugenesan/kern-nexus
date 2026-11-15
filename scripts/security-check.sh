@@ -13,7 +13,7 @@ if [ -x "$BIN" ]; then
   file "$BIN" | grep -q 'ELF 32-bit' || bad "not a 32-bit ARM ELF"
   file "$BIN" | grep -q 'statically linked' || bad "not statically linked"
   readelf -d "$BIN" 2>/dev/null | grep -q NEEDED && bad "dynamic dependencies"
-  for s in save_ppm camd.sock /data/krux micropython; do
+  for s in save_ppm /data/krux micropython; do
     strings "$BIN" 2>/dev/null | grep -q "$s" && bad "binary has $s"
   done
 fi

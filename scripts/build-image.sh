@@ -17,6 +17,11 @@ KERNEL_IMG="${KERNEL_IMG:-$ROOT/artifacts/built/ko/arch/arm/boot/zImage-dtb}"
 KERN_BIN="${KERN_BIN:-$ROOT/artifacts/built/kern-nexus}"
 [ -f "$KERNEL_IMG" ] || { echo "no kernel: run scripts/build-kernel.sh" >&2; exit 1; }
 [ -x "$KERN_BIN" ] || { echo "no kern binary: run scripts/build-kern.sh" >&2; exit 1; }
+CAMD_BIN="${CAMD_BIN:-$ROOT/artifacts/built/camd}"
+if [ ! -x "$CAMD_BIN" ]; then
+  bash scripts/build-camd.sh
+fi
+export CAMD_BIN
 
 export KERN_RELEASE=1
 export KERN_SEAL="${KERN_SEAL:-1}"
