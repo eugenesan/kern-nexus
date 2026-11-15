@@ -28,6 +28,8 @@ typedef struct {
                   uint8_t *sw2);
 } kern_nfc_transport_t;
 
+/* Ask a bring-up/discovery loop to stop at its next read. */
+void kern_nfc_cancel(void);
 int kern_nfc_bring_up(kern_nfc_t *nfc);
 int kern_nfc_transceive(kern_nfc_t *nfc, const uint8_t *apdu, size_t apdu_len,
                         uint8_t *resp, size_t *resp_len, uint8_t *sw1,

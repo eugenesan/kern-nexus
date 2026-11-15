@@ -185,6 +185,7 @@ typedef struct {
 
 /* The one BCM2079x.  nci_bind() clears everything when the fd changes. */
 static nci_state_t g_nci = {.fd = -1};
+static volatile int g_cancel;
 
 /* --- small utilities --------------------------------------------------- */
 
@@ -589,6 +590,8 @@ static int nci_discover(kern_nfc_t *nfc, nci_state_t *st, int timeout_ms,
     int left = nci_timeout_left(deadline);
     int r;
 
+    if (g_cancel)
+      return -1;
     if (left == 0)
       return 1;
 
@@ -710,6 +713,8 @@ static int nci_activate(kern_nfc_t *nfc, nci_state_t *st, const uint8_t *ntf,
  * at most TAG_TIMEOUT_MS (30 s).  Returns 0 when a tag is ready for
  * kern_nfc_transceive(), -1 on a protocol error or timeout.
  */
+void kern_nfc_cancel(void) { g_cancel = 1; }
+
 int kern_nfc_bring_up(kern_nfc_t *nfc) {
   int64_t deadline;
   nci_state_t *st;
@@ -724,6 +729,7 @@ int kern_nfc_bring_up(kern_nfc_t *nfc) {
   st = &g_nci;
   nci_bind(st, nfc->fd);
   st->connected = 0;
+  g_cancel = 0;
   deadline = nci_now_ms() + TAG_TIMEOUT_MS;
 
   for (;;) {
@@ -732,7 +738,7 @@ int kern_nfc_bring_up(kern_nfc_t *nfc) {
     int left = nci_timeout_left(deadline);
     int r;
 
-    if (left == 0)
+    if (left == 0 || g_cancel)
       return -1;
 
     /* A setup failure is a protocol error, not a poll that missed a tag. */
@@ -740,7 +746,7 @@ int kern_nfc_bring_up(kern_nfc_t *nfc) {
       return -1;
 
     left = nci_timeout_left(deadline);
-    if (left == 0)
+    if (left == 0 || g_cancel)
       return -1;
     if (left > POLL_WINDOW_MS)
       left = POLL_WINDOW_MS;
