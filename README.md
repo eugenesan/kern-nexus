@@ -9,8 +9,10 @@ This is the C counterpart of [`krux-nexus`](../krux-nexus).  It uses the
 same TWRP recovery template, the same kernel tree and the same hardware
 contract, but the payload is kern instead of Krux + MicroPython.
 
-**Status:** port scaffold and documentation.  The first working target is
-the static Linux/ARM build in `ports/nexus5`; see the phases in
+**Status (2026-11-14):** the static ARM kern binary builds and runs on the
+Nexus 5.  The UI draws on the panel, touch works, and the camera daemon
+starts and publishes frames through the bridge.  Next are QR decode,
+NFC/SeedKeeper and the XBT block rules; see
 [docs/bringup-plan.md](docs/bringup-plan.md).
 
 **Start here:** [docs/kern-nexus-blueprint.md](docs/kern-nexus-blueprint.md)

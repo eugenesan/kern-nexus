@@ -2,9 +2,10 @@
 
 **Bootstrap status (2026-11-14):** the standalone unified-sighash reference
 passes all **166** embit vectors (`make -C tools/sighash`); the boot-chain
-bootstrap image runs on the device; and the real static ARM kern binary now
-builds and starts on the Nexus 5, drawing its disclaimer screen on fb0.
-Touch, camera, NFC and the full wallet flow are still pending.
+bootstrap image runs; the real static ARM kern binary builds and draws on
+the Nexus 5 panel; touch works; and camd publishes 960×1280 frames through
+the bridge at 10 fps.  QR decode with an external code, NFC/SeedKeeper and
+the XBT block rules are next.
 
 The order matters: each phase has an observable exit criterion.  Do not
 start the unified sighash on hardware before the C vectors pass; do not
