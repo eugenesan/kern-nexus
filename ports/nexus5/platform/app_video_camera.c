@@ -74,22 +74,9 @@ static int connect_camd(void) {
   return fd;
 }
 
-static void yuv420_to_rgb565(const uint8_t *yuv, uint32_t w, uint32_t h,
-                             uint16_t *out) {
-  /* Crucially, only the luma is trustworthy here: camd's chroma plane is
-   * the sensor's own format (centred on 16, not 128), and the Python
-   * client discards it too.  A grayscale preview is correct and enough
-   * for QR/entropy; the decoder uses the same Y. */
-  for (uint32_t i = 0; i < w * h; i++) {
-    uint8_t y = yuv[i];
-    out[i] = (uint16_t)(((y & 0xf8) << 8) | ((y & 0xfc) << 3) | (y >> 3));
-  }
-}
-
 static void *camera_thread(void *arg) {
   (void)arg;
-  uint16_t *rgb = NULL;
-  uint32_t rgb_w = 0, rgb_h = 0;
+  klog("kern-nexus camera: thread start\n");
   while (!s_stop) {
     uint8_t hdr[32];
     if (s_sock < 0) {
@@ -130,28 +117,25 @@ static void *camera_thread(void *arg) {
       s_sock = -1;
       continue;
     }
-    if (w != rgb_w || h != rgb_h) {
-      free(rgb);
-      rgb = malloc((size_t)w * h * sizeof(*rgb));
-      rgb_w = w;
-      rgb_h = h;
-    }
-    if (rgb && s_cb && !s_stop) {
+    if (s_cb && !s_stop) {
       static int frames;
       if (!frames)
-        klog("kern-nexus camera: first frame %ux%u (y=%u uv=%u)\n", w, h,
+        klog("kern-nexus camera: first frame %ux%u Y8 (y=%u uv=%u)\n", w, h,
              ysz, uvsz);
       frames++;
-      yuv420_to_rgb565(frame, w, h, rgb);
       s_w = w;
       s_h = h;
-      s_cb((uint8_t *)rgb, 0, w, h, (size_t)w * h * 2);
+      /* Y8 only: camd's chroma is not a standard UV plane, and the scanner
+       * and preview are grayscale.  The callback copies what it needs before
+       * we free the frame. */
+      s_cb(frame, 0, w, h, ysz);
     }
     free(frame);
-    /* The scanner's software PPA is expensive; 10 fps keeps the UI
-     * responsive and is ample for QR/entropy. */
+    /* camd stays the expensive side; 10 fps keeps the UI responsive and is
+     * ample for QR/entropy. */
     usleep(100000);
   }
+  klog("kern-nexus camera: thread stop\n");
   return NULL;
 }
 
@@ -189,19 +173,27 @@ bool app_video_is_ready(void) { return s_started || access(CAMD_SOCK, F_OK) == 0
 
 esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
   (void)core_id;
-  if (!app_video_is_ready())
+  if (!app_video_is_ready()) {
+    klog("kern-nexus camera: start refused, not ready\n");
     return ESP_ERR_INVALID_STATE;
-  if (s_running)
+  }
+  if (s_running) {
+    klog("kern-nexus camera: start while already running\n");
     return ESP_OK;
+  }
   s_cb = cb;
   s_stop = 0;
-  if (pthread_create(&s_thread, NULL, camera_thread, NULL) != 0)
+  if (pthread_create(&s_thread, NULL, camera_thread, NULL) != 0) {
+    klog("kern-nexus camera: pthread_create failed\n");
     return ESP_FAIL;
+  }
   s_running = 1;
+  klog("kern-nexus camera: thread created\n");
   return ESP_OK;
 }
 
 esp_err_t app_video_stop(void) {
+  klog("kern-nexus camera: stop (running=%d)\n", s_running);
   if (!s_running)
     return ESP_OK;
   s_stop = 1;
@@ -218,7 +210,9 @@ esp_err_t app_video_stop(void) {
 
 bool app_video_is_streaming(void) { return s_running; }
 
-uint32_t app_video_get_buf_size(void) { return s_w * s_h * 2; }
+video_fmt_t app_video_get_format(void) { return APP_VIDEO_FMT_GREY; }
+
+uint32_t app_video_get_buf_size(void) { return s_w * s_h; }
 
 esp_err_t app_video_get_resolution(uint32_t *width, uint32_t *height) {
   if (width) *width = s_w;

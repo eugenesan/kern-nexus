@@ -110,10 +110,15 @@ static void panel_commit(void) {
   struct fb_var_screeninfo var;
   if (ioctl(s_fb_fd, FBIOGET_VSCREENINFO, &var) < 0)
     return;
+  /* The panel has 1920 rows of visible area and two virtual pages.  LVGL
+   * draws at memory offset 0, so always commit page 0; trusting the live
+   * yoffset lets the driver/pager leave it at 1920, which shows the empty
+   * second page and a backlit black screen. */
+  var.yoffset = 0;
   memset(&dc, 0, sizeof(dc));
   dc.var = var;
   dc.var.xoffset = 0;
-  dc.var.yoffset = var.yoffset;
+  dc.var.yoffset = 0;
   dc.var.xres = var.xres;
   dc.var.yres = var.yres;
   int crc = ioctl(s_fb_fd, MSMFB_DISPLAY_COMMIT, &dc);
