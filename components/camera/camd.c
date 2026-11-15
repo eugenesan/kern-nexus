@@ -1,0 +1,4758 @@
+/*
+ * imaging8.c -- the imaging server, with both cameras.
+ *
+ * Same as imaging7.c, but the per-camera parameters are selected at
+ * runtime, and the front camera (MT9M114B) is supported as well:
+ *
+ *   rear  (IMX179)    the sensor's mode registers are not in any kernel,
+ *                     so they are lifted out of the vendor's sensor
+ *                     library by tools/gen-imx179-regs.py and written
+ *                     with CFG_WRITE_I2C_ARRAY.
+ *
+ *   front (MT9M114B)  the kernel's driver has the tables
+ *                     (mt9m114_recommend_settings, mt9m114_720p_settings,
+ *                     mt9m114_config_change_settings) and implements the
+ *                     sensor config ioctls itself, so *nothing* has to be
+ *                     sent: CFG_SET_INIT_SETTING, CFG_SET_RESOLUTION and
+ *                     CFG_SET_START_STREAM are enough -- no vendor data
+ *                     at all.
+ *
+ * The front camera is the interesting test: it tells us whether the
+ * pipeline (CSID -> ISP -> buffers -> DQBUF) completes on our own
+ * kernel, with the sensor part taken care of by the kernel itself.
+ *
+ * Run:
+ *   imaging8 [width] [height] [ion-heap-mask] [front|rear]
+ */
+
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <dirent.h>
+#include <sys/un.h>
+#include <dirent.h>
+#include <signal.h>
+#include <time.h>
+
+/*
+ * A delivered build has no debug stream.  The print sites below are the
+ * camera's trace -- frame counts, geometry, exposure, AF scores -- and
+ * they are not part of the product.  Compiling them out also removes
+ * the format strings and the paths they contain.  The stub sends the
+ * remaining stderr (perror) to /dev/null in the release.
+ */
+#ifdef KRUX_RELEASE
+#define printf(...) ((void)0)
+#endif
+#include <unistd.h>
+
+#include "v4l2_caf.h"
+#include "imx179_regs.h"
+#include "isp.h"
+#include "ispif.h"
+#include "ion.h"
+#include "mipi.h"
+#include "sensor.h"
+#include "cam_config.h"
+#include "cam_capture.h"
+#include "cam_cycle_preview.h"
+#include "cam_chromatrix.h"
+#include "cam_chromatrix_offline.h"
+#include "cam_actuator.h"
+#include "sensor_config.h"
+#include "sensor_live.h"
+
+/* The host UAPI header used for this static build omits the V4L2 event
+ * structure/ioctl, while the hammerhead kernel implements the standard
+ * VIDIOC_DQEVENT ABI. */
+struct v4l2_event {
+	uint32_t type;
+	union {
+		uint8_t data[64];
+	} u;
+	uint32_t pending;
+	uint32_t sequence;
+	/* The 32-bit hammerhead kernel uses two 32-bit longs here.  The
+	 * build host's hard-float libc defaults struct timespec to time64,
+	 * which changes the ioctl number because its encoded size changes. */
+	struct {
+		int32_t tv_sec;
+		int32_t tv_nsec;
+	} timestamp;
+	uint32_t id;
+	uint32_t reserved[8];
+};
+_Static_assert(sizeof(struct v4l2_event) == 120,
+	       "hammerhead VIDIOC_DQEVENT ABI must be 120 bytes");
+#define VIDIOC_DQEVENT _IOR('V', 89, struct v4l2_event)
+
+/* the CPP (colour processing) firmware: a 16 KB blob the kernel loads
+ * through the firmware loader, named by VIDIOC_MSM_CPP_LOAD_FIRMWARE */
+struct msm_camera_v4l2_ioctl_t {
+	unsigned int id;
+	unsigned int len;
+	unsigned int trans_code;
+	void *ioctl_ptr;
+};
+
+#define VIDIOC_MSM_CPP_LOAD_FIRMWARE \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 3, struct msm_camera_v4l2_ioctl_t)
+#define VIDIOC_MSM_CPP_GET_INST_INFO \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 2, struct msm_camera_v4l2_ioctl_t)
+#define CPP_NODE "/dev/v4l-subdev17"
+#define CPP_FRAME_DONE_EVENT (V4L2_EVENT_PRIVATE_START + 0)
+
+#define MSM_CAMERA_V4L2_EVENT_TYPE (0x08000000 + 0x00002000)
+#define MSM_CAMERA_NEW_SESSION     1
+#define MSM_CAMERA_DEL_SESSION     2
+#define MSM_CAMERA_SET_PARM        3
+#define MSM_CAMERA_GET_PARM        4
+#define MSM_CAMERA_MSM_NOTIFY      7
+#define MSM_CAMERA_CMD_SUCESS      0x00000001
+
+#define PRIV_S_CROP        (0x08000000 + 1)
+#define PRIV_G_CROP        (0x08000000 + 2)
+#define PRIV_G_FMT         (0x08000000 + 3)
+#define PRIV_S_FMT         (0x08000000 + 4)
+#define PRIV_TRY_FMT       (0x08000000 + 5)
+#define PRIV_METADATA      (0x08000000 + 6)
+#define PRIV_QUERY_CAP     (0x08000000 + 7)
+#define PRIV_STREAM_ON     (0x08000000 + 8)
+#define PRIV_STREAM_OFF    (0x08000000 + 9)
+#define PRIV_NEW_STREAM    (0x08000000 + 10)
+#define PRIV_DEL_STREAM    (0x08000000 + 11)
+#define PRIV_SHUTDOWN      (0x08000000 + 12)
+
+/* the msm-config node: the event channel */
+#define CONFIG_NODE "/dev/video0"
+
+/* the format the camera node wants: struct msm_v4l2_format_data */
+struct msm_v4l2_format_data {
+	unsigned int type;
+	unsigned int width;
+	unsigned int height;
+	unsigned int pixelformat;
+	unsigned char num_planes;
+	unsigned char pad[3];
+	unsigned int plane_sizes[8];
+};
+
+#define EVSZ 128
+#define DQ_IOCTL  _IOR('V', 89, char[EVSZ])
+#define ACK_IOCTL _IOW('V', 224, char[EVSZ])
+
+#define OFF_CMD     8
+#define OFF_STATUS  12
+#define OFF_SESSION 16
+#define OFF_STREAM  20
+#define OFF_ARG     36
+#define OFF_RET     40
+#define OFF_ID      88
+
+/* the sensor config ioctls (include/media/msm_cam_sensor.h) */
+#define CFG_SET_SLAVE_INFO       0
+#define CFG_SLAVE_READ_I2C       1
+#define CFG_WRITE_I2C_ARRAY      2
+#define CFG_SLAVE_WRITE_I2C_ARRAY 3
+#define CFG_WRITE_I2C_SEQ_ARRAY  4
+#define CFG_POWER_UP             5
+#define CFG_POWER_DOWN           6
+#define CFG_SET_STOP_STREAM_SETTING 7
+#define CFG_GET_SENSOR_INFO      8
+#define CFG_GET_SENSOR_INIT_PARAMS 9
+#define CFG_SET_INIT_SETTING     10
+#define CFG_SET_RESOLUTION       11
+#define CFG_SET_STOP_STREAM      12
+#define CFG_SET_START_STREAM     13
+
+struct sensorb_cfg_data {
+	int cfgtype;
+	unsigned char cfg[76];
+	unsigned int setting_size;
+};
+
+#define SENSOR_CFG_IOCTL \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 1, struct sensorb_cfg_data)
+
+/* ------------------------------------------------------------------ */
+struct camera {
+	const char *name;
+	int		binned;		/* use the 1632x1224 binning mode */
+	const char *sensor_node;	/* the msm-sensor video node */
+	const char *sensor_subdev;	/* the sensor's subdev */
+	const char *csiphy_node;
+	const char *csid_node;
+	int		csid_core;	/* which CSID the PHY talks to */
+	int		width, height;	/* the sensor's frame geometry */
+	unsigned int	pix_clk;
+	unsigned int	ion_mask;
+	int		kernel_programs_sensor;	/* MT9M114B does it itself */
+};
+
+static const struct camera cam_rear = {
+	.name = "rear",
+	.sensor_node = "/dev/video1",
+	.sensor_subdev = "/dev/v4l-subdev11",
+	.csiphy_node = "/dev/v4l-subdev0",
+	.csid_node = "/dev/v4l-subdev3",
+	.csid_core = 0,
+	/* the IMX179's HMAX/VMAX, read back from the sensor: 3280x2464
+	 * (the active area is 3264x2448, the rest is blanking) */
+	.width = 3280, .height = 2464,
+	.pix_clk = 260000000,	/* the value the vendor's HAL uses */
+	.binned = 0,
+	.ion_mask = ION_MASK_SYSTEM,
+	.kernel_programs_sensor = 0,
+};
+
+/* the rear camera in its 1632x1224 binning mode */
+static struct camera cam_binned = {
+	.name = "rear-binned",
+	.sensor_node = "/dev/video1",
+	.sensor_subdev = "/dev/v4l-subdev11",
+	.csiphy_node = "/dev/v4l-subdev0",
+	.csid_node = "/dev/v4l-subdev3",
+	.csid_core = 0,
+	/* HMAX 1640, VMAX 1232 */
+	.width = 1640, .height = 1232,
+	.pix_clk = 60600000,	/* 1640 * 1232 * 30 */
+	.ion_mask = ION_MASK_SYSTEM,
+	.binned = 1,
+	.kernel_programs_sensor = 0,
+};
+
+static const struct camera cam_front = {
+	.name = "front",
+	.sensor_node = "/dev/video2",
+	.sensor_subdev = "/dev/v4l-subdev12",
+	.csiphy_node = "/dev/v4l-subdev2",
+	.csid_node = "/dev/v4l-subdev5",
+	.csid_core = 2,
+	.width = 1280, .height = 720,
+	.pix_clk = 0,
+	.ion_mask = ION_MASK_SYSTEM,
+	.kernel_programs_sensor = 1,
+};
+
+static const struct camera *cam = &cam_rear;
+/* The ION heap masks are masks of heap IDS, not of heap types: the
+ * "system" heap is id 30, so its mask is 1 << 30.  The old value
+ * (0x10000, bit 16) is the "CP writeback" heap, which is a 8660-only
+ * heap -- on this 8974 the allocation fails with ENOENT. */
+static unsigned int ion_mask_override = 0;
+
+/* A register to write after the vendor's sequence, to try a value the
+ * sequence does not set.  The sensor's virtual channel is such a
+ * register: the packets arrive on VC 1 under our kernel and on VC 0
+ * in the ROM, and the sequence is the same in both, so the register
+ * that decides it is one the sequence does not write.  0xffffffff
+ * means "do not poke". */
+static unsigned int poke_reg = 0xffffffff;
+
+/* Whether the ISP-IF should be given both virtual channels. */
+static int two_cids = 0;
+
+/*
+ * Whether the ISP-IF's crop is enabled.
+ *
+ * The crop is what switches the ISP's pixel input on: msm_ispif_enable_crop()
+ * -- the function that sets the PIX0 enable bit in CTRL_0 -- is only called
+ * when crop_enable is set, so without it the pixel input stays off.
+ *
+ * The vendor's own camera HAL, however, sends crop_enable 0 with the
+ * window 0..0 (measured under our kernel, in the kernel's own print of
+ * the routing), and it works.  So the crop is a knob, not a fact.
+ */
+static int crop_enable = 1;
+
+/*
+ * Send the vendor's *capture* configuration as well.
+ *
+ * The vendor's camera uploads its ISP configuration on every frame, and
+ * the preview's and the capture's are not the same: the capture sets the
+ * SFE's and the CAMIF's geometry for the photograph (0x444 = 0x403f and
+ * 0x464 = 0x30001f5), while the preview's are the viewfinder's
+ * (0x444 = 0x6020 and 0x464 = 0x18000fc).  The camera page needs the
+ * capture's.
+ */
+static int send_capture_config = 1;
+static unsigned int poke_val = 0;
+/* the camera node's session id (the video node number), taken from the
+ * events: 1 for the rear camera, 2 for the front */
+static unsigned int session_id = 1;
+/* the front camera's command array length: 0 = empty (the kernel's own
+ * tables are written), 1 = a dummy entry */
+static int front_cmd_count = 0;
+/* the CPP firmware file to load (0 = none) */
+static const char *cpp_fw_path = 0;
+/* the ISP's input source: CAMIF_RAW (2) feeds the ISP with the raw
+ * Bayer from the CSID (and then the CPP), PIX_VIEWFINDER (1) is the
+ * ISP's own output and bypasses the CPP */
+static unsigned int isp_stream_src = CAMIF_RAW;
+
+static unsigned rd32(const unsigned char *p)
+{
+	return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24);
+}
+static void wr32(unsigned char *p, unsigned v)
+{
+	p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24;
+}
+
+/* ------------------------------------------------------------------ *
+ * the sensor
+ * ------------------------------------------------------------------ */
+static int sensor_fd = -1;
+
+static int sensor_cfg(int cfgtype, void *setting, unsigned int size)
+{
+	struct sensorb_cfg_data c;
+	memset(&c, 0, sizeof(c));
+	c.cfgtype = cfgtype;
+	c.setting_size = size;
+	if (setting)
+		/* the union member is a POINTER: the kernel copies the
+		 * struct out of user space from there, so the address
+		 * has to be handed over, not a copy of the struct */
+		*(void **)c.cfg = setting;
+	if (ioctl(sensor_fd, SENSOR_CFG_IOCTL, &c) < 0) {
+		printf("[sensor] cfg %d: %s\n", cfgtype, strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * Write the sensor's registers.
+ *
+ * The data type matters: the vendor's camera HAL writes the *geometry*
+ * (0x0340, 0x0342) as one 16-bit word and everything else as bytes --
+ * that is what its own ioctl headers say (the `sensorio_*.bin`
+ * captures).  A byte write of the geometry puts the bytes the other way
+ * round, and the sensor then runs in the wrong mode.
+ *
+ * A register with the high bit set in its address is written as a
+ * word: 0x8000 | addr.
+ */
+static int sensor_write_regs_as(const struct imx179_reg *regs, int n,
+			       unsigned int data_type)
+{
+	struct msm_camera_i2c_reg_setting set;
+	struct msm_camera_i2c_reg_array *arr;
+	int i, words = 0;
+
+	arr = malloc(n * sizeof(*arr));
+	if (!arr)
+		return -1;
+	for (i = 0; i < n; i++) {
+		arr[i].reg_addr = regs[i].addr;
+		arr[i].reg_data = regs[i].data;
+		arr[i].delay = regs[i].delay;
+	}
+	memset(&set, 0, sizeof(set));
+	set.reg_setting = arr;
+	set.size = n;
+	set.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	set.data_type = data_type;
+	set.delay = 0;
+	if (sensor_cfg(CFG_WRITE_I2C_ARRAY, &set, sizeof(set)) < 0) {
+		free(arr);
+		return -1;
+	}
+	free(arr);
+	printf("[sensor] wrote %d registers\n", n);
+	return 0;
+}
+
+/* the usual way: one byte per register */
+static int sensor_write_regs(const struct imx179_reg *regs, int n)
+{
+	return sensor_write_regs_as(regs, n, MSM_CAMERA_I2C_BYTE_DATA);
+}
+
+/*
+ * Idle frame length.  When no client has asked for a frame for a few
+ * seconds, raise the sensor's VTS so it produces the slowest frame it
+ * can: the register is 16-bit, and at 260 MHz with a 3280-pixel line
+ * the floor is ~1.2 fps.  The first request restores the VTS the
+ * camera page chose.
+ *
+ * This is the register the auto-exposure already writes mid-stream, so
+ * it is a proven operation: the sensor keeps its frame phase and no
+ * frame is stitched.  The heat is the per-frame ISP/CPP/kernel work, so
+ * it falls with the frame rate.  The stream is never stopped.
+ *
+ * Knobs (persistent, read at startup):
+ *   idle_vts    the slow frame length; 0 disables (the default).
+ *               The sensor's floor is 0xffff (~1.2 fps), but a VTS
+ *               that far from the mode's frame makes the CAMIF cut the
+ *               long frame into many partial frames: the loop then
+ *               runs faster, not slower.  Going below the mode's rate
+ *               needs the ISP geometry (lines_per_frame/last_line)
+ *               changed with it -- see docs/cam-state.md.
+ *   idle_after  seconds without a request before slowing (5)
+ */
+static unsigned int idle_vts = 0;
+static int idle_after = 5;
+static unsigned int normal_vts = 0x09D6;
+static volatile int vts_slowed;
+static volatile time_t last_request_at;
+
+static int sensor_set_vts(unsigned int vts)
+{
+	struct imx179_reg r = { 0x0340, vts, 0 };
+
+	return sensor_write_regs_as(&r, 1, MSM_CAMERA_I2C_WORD_DATA);
+}
+
+/* Every frame request goes through here: the normal frame length is
+ * restored before the request is answered, so the page is not served
+ * at the idle rate. */
+static void note_frame_request(void)
+{
+	last_request_at = time(NULL);
+	if (vts_slowed) {
+		if (sensor_set_vts(normal_vts) == 0) {
+			vts_slowed = 0;
+			printf("[stream] VTS restored to 0x%04x\n",
+			       normal_vts);
+			fflush(stdout);
+		}
+	}
+}
+
+/*
+ * Set the exposure and gain the way the vendor does: inside the
+ * sensor's group hold (0x0104), so the values latch at the next frame
+ * boundary.  Written bare they take effect mid-readout, and the frame
+ * gets a moving per-row band -- exactly what appeared whenever the
+ * exposure or gain changed.  The vendor's own settings do
+ * 0x0104=1, the registers, 0x0104=0 (imx179_settings_3/_7/_6).
+ */
+static int sensor_set_exposure_gain(int exp, int gain)
+{
+	struct imx179_reg hold = { 0x0104, 0x01, 0 };
+	struct imx179_reg eg[2] = {
+		{ 0x0202, exp, 0 },
+		{ 0x0204, gain, 0 },
+	};
+	struct imx179_reg rel = { 0x0104, 0x00, 0 };
+	int rc;
+
+	rc = sensor_write_regs_as(&hold, 1, MSM_CAMERA_I2C_BYTE_DATA);
+	if (rc == 0)
+		rc = sensor_write_regs_as(eg, 2, MSM_CAMERA_I2C_WORD_DATA);
+	sensor_write_regs_as(&rel, 1, MSM_CAMERA_I2C_BYTE_DATA);
+	return rc;
+}
+
+/* --- reading the sensor's registers back --------------------------------
+ *
+ * The kernel's sensor-config ioctl can read a register
+ * (CFG_SLAVE_READ_I2C), which is how the imaging server can ask the
+ * sensor what mode it is really in instead of guessing from the table.
+ */
+struct msm_camera_i2c_read_config {
+	unsigned short slave_addr;
+	unsigned short reg_addr;
+	unsigned int data_type;		/* enum msm_camera_i2c_data_type */
+	unsigned short *data;
+};
+
+#define CFG_SLAVE_READ_I2C	1
+#define MSM_CAMERA_I2C_BYTE_DATA	1
+#define IMX179_SLAVE_ADDR	0x20
+
+static int sensor_read_reg(uint16_t reg, uint16_t *val)
+{
+	struct msm_camera_i2c_read_config rc;
+	uint16_t data = 0;
+
+	memset(&rc, 0, sizeof(rc));
+	rc.slave_addr = IMX179_SLAVE_ADDR;
+	rc.reg_addr = reg;
+	rc.data_type = MSM_CAMERA_I2C_BYTE_DATA;
+	rc.data = &data;
+	if (sensor_cfg(CFG_SLAVE_READ_I2C, &rc, sizeof(rc)) < 0)
+		return -1;
+	*val = data;
+	return 0;
+}
+
+/* the registers that carry the mode and the frame geometry */
+static const uint16_t geom_regs[] = {
+	0x0100, 0x0101, 0x0102, 0x0105, 0x0106,
+	0x0301, 0x0303, 0x0305, 0x0307, 0x0309, 0x030b, 0x030c, 0x030d,
+	0x0340, 0x0341, 0x0342, 0x0343, 0x0344, 0x0345,
+	0x034c, 0x034d, 0x034e, 0x034f, 0x0350, 0x0351,
+	0x0202, 0x0203, 0x0204, 0x0205,
+};
+
+static void sensor_dump_regs(const char *when)
+{
+	unsigned i;
+
+	printf("[sensor] register read-back (%s):\n", when);
+	for (i = 0; i < sizeof(geom_regs) / sizeof(geom_regs[0]); i++) {
+		uint16_t v = 0;
+		if (sensor_read_reg(geom_regs[i], &v) < 0) {
+			printf("  0x%04x: <read failed>\n", geom_regs[i]);
+			continue;
+		}
+		printf("  0x%04x = 0x%04x\n", geom_regs[i], v);
+	}
+	fflush(stdout);
+}
+
+/* the IMX179 starts streaming when 0x0100 is set to 1 */
+static const struct imx179_reg stream_on_regs[] = { { 0x0100, 0x01, 0 } };
+static const struct imx179_reg stream_off_regs[] = { { 0x0100, 0x00, 0 } };
+
+/*
+ * The vendor's own sequence, captured from the ROM's camera HAL
+ * (sensor_config.h).
+ *
+ * The IMX179's mode change is not one register array: the HAL writes a
+ * 92-entry "page" sequence first (the sensor's PLL, MIPI and analogue
+ * settings, written through the page registers 0xfffd/0x0080/0xfffc),
+ * then the 62-entry mode table, then a "config change" array, then the
+ * geometry, and only then 0x0100 = 1 to start streaming.  Writing the
+ * mode table alone leaves the sensor silent on the MIPI link.
+ */
+static int use_vendor_sensor_seq = 0;
+
+/*
+ * Program the sensor from the register list that was read out of the
+ * sensor while the ROM's own camera app had it open (sensor_live.h),
+ * instead of the arrays captured from an older camera stack.
+ *
+ *   1 = the vendor's live list only
+ *   2 = the captured page sequence first, then the vendor's live list
+ */
+static int use_live_sensor_seq = 0;
+static int frames_to_wait = 10;
+
+static int sensor_write_array(const struct sensor_write *w)
+{
+	struct msm_camera_i2c_reg_setting set;
+
+	memset(&set, 0, sizeof(set));
+	set.reg_setting = (struct msm_camera_i2c_reg_array *)w->regs;
+	set.size = w->count;
+	set.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+	set.data_type = MSM_CAMERA_I2C_BYTE_DATA;
+	return sensor_cfg(CFG_WRITE_I2C_ARRAY, &set, sizeof(set));
+}
+
+/*
+ * The order in which the vendor's arrays are written.
+ *
+ * The capture holds every write the camera HAL made during a whole
+ * session, and that session included several *mode changes*: the
+ * captures 7 and 9 to 13 belong to other modes (their HMAX is 0xda,
+ * 0xb3, 0x9e -- the mode the camera uses has 0xc8).  Writing them
+ * all leaves the sensor in the last mode, with a 40k-pixel line,
+ * which is not the mode the camera runs in -- and then the image's
+ * packets do not arrive at all.
+ *
+ * The mode is: the page array, the mode table, the stream-off, the
+ * config change, the geometry (the captures 0 to 6) and then the
+ * stream-on (the capture 8).
+ */
+static const int vendor_sequence_order[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
+#define VENDOR_SEQUENCE_STEPS \
+	(sizeof(vendor_sequence_order) / sizeof(vendor_sequence_order[0]))
+
+static int sensor_write_vendor_sequence(void)
+{
+	unsigned i;
+
+	for (i = 0; i < VENDOR_SEQUENCE_STEPS; i++) {
+		int n = vendor_sequence_order[i];
+
+		if (sensor_write_array(&sensor_sequence[n]) < 0) {
+			printf("[sensor] vendor array %d (%d regs): failed\n",
+			       n, sensor_sequence[n].count);
+			return -1;
+		}
+	}
+	printf("[sensor] vendor sequence: %d arrays written\n",
+	       (int)VENDOR_SEQUENCE_STEPS);
+	return 0;
+}
+
+/*
+ * The vendor's live register list.
+ *
+ * The captures in sensor_config.h come from an older camera stack, and
+ * they differ from what the sensor really holds in three ways that
+ * matter: the PLL (0x0202/0x0203), the byte order of the geometry
+ * (0x0340/0x0341 and 0x0342/0x0343), and three registers that the
+ * captures do not have at all (0x0304, 0x0306, 0x0407).  With the
+ * wrong values the sensor runs in the wrong mode and sends nothing but
+ * the embedded data.
+ */
+static int sensor_write_live_sequence(void)
+{
+	if (use_live_sensor_seq == 2) {
+		/* the page sequence: the analog settings, which live on
+		 * the sensor's other pages */
+		if (sensor_write_array(&sensor_sequence[0]) < 0) {
+			printf("[sensor] the page sequence: failed\n");
+			return -1;
+		}
+	}
+	if (sensor_write_regs(imx179_live_photo, IMX179_LIVE_PHOTO_LEN) < 0) {
+		printf("[sensor] the vendor's live list: failed\n");
+		return -1;
+	}
+	/* the geometry is a word write, and the data type belongs to
+	 * the whole array -- so it needs an array of its own */
+	if (sensor_write_regs_as(imx179_live_geometry, IMX179_LIVE_GEOMETRY_LEN,
+				MSM_CAMERA_I2C_WORD_DATA) < 0) {
+		printf("[sensor] the geometry: failed\n");
+		return -1;
+	}
+	printf("[sensor] the vendor's live list: %d registers written\n",
+	       (int)IMX179_LIVE_PHOTO_LEN);
+	return 0;
+}
+
+/* Autofocus (defined with the actuator code below). */
+static int focus_step = -1;
+/* Digital preview/QR gain.  The IMX179's analog gain tops out around
+ * 0x00ff in this mode, and a dim scene still needs a lift.  1 = off. */
+static int luma_gain = 1;
+/* 0 = no unsharp, 1 = 2*luma-b, 2 = softer (3*luma-b)/2. */
+static int unsharp_amount = 0;
+static int refocus_request;
+static int refocus_full;
+/* The last fine-sweep step.  A normal scan-start refocus starts the
+ * coarse sweep just below it instead of at infinity, so a second scan
+ * reaches the focus in a few steps.  -1 means no cache yet. */
+static int last_focus_step = -1;
+/* How sharp the frame is, divided by how bright it is.  The measure is
+ * the same whatever the exposure, so it can be compared with a value
+ * measured under a different exposure.  The best this lens position
+ * ever gave is kept, so a scan that starts with the picture already in
+ * focus does not have to walk the range again. */
+static unsigned long af_best_contrast;
+/* Set when the exposure changes.  The sharpness scores of a sweep are
+ * only comparable within one exposure, so a change of exposure
+ * invalidates a sweep that is running: otherwise the auto-exposure and
+ * the autofocus drive the sensor at the same time and fight over the
+ * same frames. */
+static volatile int af_abort;
+/* Whether a sweep is running at the moment.  Only then does a change
+ * of exposure invalidate anything, and only then is it worth starting
+ * a new sweep in its place. */
+static volatile int af_sweeping;
+/* The exposure and gain the sensor is running at, so that a change of
+ * either can be recognised. */
+static int cam_exposure = -1;
+static int cam_gain = -1;
+static int dump_now;
+/*
+ * Diagnostic mode (ctl 'c'): publish a linear 1:1 crop of the raw
+ * source with no demosaic, downscale or rotation, so the raw frame
+ * can be compared with the processed preview and the framebuffer.
+ */
+static volatile int rawcrop;
+/* 0 = leave the actuator alone; 1 = open+GET_INFO; 2 = +SET_INFO;
+ * 3 = +SET_DEFAULT_FOCUS; 4 = +move.  Lets the actuator sequence be
+ * bisected from the state file without rebuilding.
+ *
+ * 2 is the default: the camera sweeps the range when a scan starts.
+ * Level 0 switches the autofocus off entirely, and the lens then never
+ * moves -- so it must never be the fallback for a missing file. */
+static int af_level = 2;
+static int actuator_get_info(void);
+static int actuator_set_info(void);
+static int actuator_set_default(int dest);
+static int actuator_move(int step);
+static void af_bringup(void);
+
+/* The camera's tuning state.
+ *
+ * These are volatile settings, not firmware: they live in a tmpfs, so
+ * they are gone after a reboot and the camera comes back with its
+ * defaults.  A file that is missing is written out with its default,
+ * so the state is always complete and can be read and changed at any
+ * time.  Nothing here is required for the camera to work: with no
+ * state at all it still autofocuses, and it still exposes a usable
+ * preview.
+ */
+#define CAMD_STATE_DIR "/tmp/krux"
+
+/* Read one state file.  A missing (or unreadable, or out of range)
+ * file is replaced by the default and the file is written back, so the
+ * state directory always describes the camera's configuration. */
+static int state_read(const char *name, int def, int lo, int hi)
+{
+	char path[PATH_MAX];
+	FILE *f;
+	int v = def;
+	int had_file = 0;
+
+	snprintf(path, sizeof(path), "%s/%s", CAMD_STATE_DIR, name);
+	f = fopen(path, "r");
+	if (f) {
+		had_file = 1;
+		if (fscanf(f, "%d", &v) != 1)
+			v = def;
+		fclose(f);
+	}
+	if (v < lo || v > hi) {
+		v = def;
+		had_file = 0;
+	}
+	if (!had_file) {
+		mkdir(CAMD_STATE_DIR, 0700);
+		f = fopen(path, "w");
+		if (f) {
+			fprintf(f, "%d\n", v);
+			fclose(f);
+			chmod(path, 0600);
+			printf("[state] %s = %d (default)\n", name, v);
+		}
+	}
+	return v;
+}
+
+/*
+ * A state file that survives a reboot.
+ *
+ * /tmp is a tmpfs, so a knob set there is gone after a cold boot --
+ * which makes bisecting the camera's pipeline impossible (every test
+ * needs a different setting and a reboot).  These knobs are read from
+ * /data/krux/state first, so they can be set from the host with
+ * "adb shell echo N > /data/krux/state/<name>" and a reboot keeps
+ * them.
+ */
+#ifdef KRUX_RELEASE
+/* The release keeps no state on the data partition: the knobs are
+ * rebuilt from defaults every boot in /tmp/krux. */
+#define CAMD_PERSIST_DIR "/tmp/krux"
+#else
+#define CAMD_PERSIST_DIR "/data/krux/state"
+#endif
+static const char *persist_dir = CAMD_PERSIST_DIR;
+
+static int state_read_persist(const char *name, int def, int lo, int hi)
+{
+	char path[PATH_MAX];
+	FILE *f;
+	int v = def;
+	int had_file = 0;
+
+	snprintf(path, sizeof(path), "%s/%s", persist_dir, name);
+	f = fopen(path, "r");
+	if (f) {
+		had_file = 1;
+		if (fscanf(f, "%d", &v) != 1)
+			v = def;
+		fclose(f);
+	}
+	if (v < lo || v > hi) {
+		v = def;
+		had_file = 0;
+	}
+	if (had_file)
+		printf("[state] %s = %d (persistent)\n", name, v);
+	else
+		v = state_read(name, def, lo, hi);
+	return v;
+}
+
+static int sensor_program_mode(void)
+{
+	if (sensor_cfg(CFG_POWER_UP, NULL, 0) < 0)
+		return -1;
+	printf("[sensor] powered up\n");
+	/* The vendor HAL initialises the actuator at this point: the
+	 * sensor is powered but not streaming, so CCI traffic does not
+	 * disturb a running stream. */
+	af_bringup();
+	if (cam->kernel_programs_sensor) {		/* The MT9M114B driver has the tables and writes them itself,
+		 * but the kernel copies the user's array out first, so a
+		 * (dummy) array has to be supplied. */
+		static struct msm_camera_i2c_reg_array dummy[1];
+		struct msm_camera_i2c_reg_setting set;
+		int n = front_cmd_count;	/* 0 = empty array */
+		memset(&set, 0, sizeof(set));
+		set.reg_setting = n ? dummy : NULL;
+		set.size = n;
+		set.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+		set.data_type = MSM_CAMERA_I2C_BYTE_DATA;
+		sensor_cfg(CFG_SET_INIT_SETTING, &set, sizeof(set));
+		sensor_cfg(CFG_SET_RESOLUTION, &set, sizeof(set));
+		printf("[sensor] init + resolution set (by the kernel driver)\n");
+		return 0;
+	}
+	if (use_live_sensor_seq)
+		return sensor_write_live_sequence();
+	if (use_vendor_sensor_seq) {
+		/* the vendor's own sequence (page sequence, mode table,
+		 * config change, geometry, and the stream-on) */
+		if (sensor_write_vendor_sequence() < 0)
+		if (poke_reg != 0xffffffff) {
+			struct imx179_reg one;
+			one.addr = poke_reg;
+			one.data = (uint16_t)poke_val;
+			one.delay = 0;
+			sensor_write_regs(&one, 1);
+			printf("[sensor] poked 0x%04x = 0x%04x\n", poke_reg,
+			       poke_val);
+		}
+			return -1;
+		return 0;
+	}
+	if (sensor_write_regs(IMX179_MODE_TABLE, IMX179_MODE_TABLE_LEN) < 0)
+		return -1;
+	if (cam->binned) {
+		/* the binning mode is the main settings plus the
+		 * "config change" settings of the 1632x1224 mode:
+		 * HMAX 1640, VMAX 1232 */
+		sensor_write_regs(imx179_settings_7, 20);
+
+		/*
+		 * settings_7 halves the *output* size but does not touch
+		 * the readout increments.  settings_9 (the full-resolution
+		 * mode) leaves x_odd_inc/y_odd_inc at 1, so the sensor
+		 * reads the top-left 1640x1232 of its 3280x2464 window
+		 * and throws the rest away -- a 2x crop in both axes.
+		 *
+		 * That is exactly the quarter-frame the preview showed:
+		 * the tablet's centre, which is the centre of the full
+		 * sensor, landed in the bottom-right corner of the
+		 * captured frame, and the QR came out at the full 8 px
+		 * per module rather than the 4 px a binned frame would
+		 * give.
+		 *
+		 * 0x0383/0x0387 are x_odd_inc/y_odd_inc.  The IMX074 and
+		 * IMX135 drivers use 3 for their 2x2-binned modes
+		 * (binning_factor = 2) and 1 for full resolution; the
+		 * IMX179 has the same register layout, so 3 bins the
+		 * whole window down into the 1640x1232 output.
+		 */
+		{
+			static const struct imx179_reg binning[2] = {
+				{ 0x0383, 0x03, 0 },	/* x_odd_inc */
+				{ 0x0387, 0x03, 0 },	/* y_odd_inc */
+			};
+			sensor_write_regs(binning, 2);
+		}
+	}
+	return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * the MIPI link
+ * ------------------------------------------------------------------ */
+static int csiphy_fd = -1;
+static int csid_fd = -1;
+
+/* the virtual channel the sensor uses, and the MIPI data type */
+static int cam_vc = 1;
+/*
+ * The data types the IMX179 sends, as the *vendor's* camera configures
+ * them.  Measured by running the ROM's camera under our kernel, which
+ * logs the CSID's own registers:
+ *
+ *   CSID0 LUT: vc0 0x0000122b vc1 0x00000000 ..., cfg0 0x00000023 ...
+ *
+ * The CSID's LUT holds one byte per channel: channel 0 (the one the
+ * ISP-IF routes to PIX0) carries data type 0x2b with decode format 2,
+ * and channel 1 carries 0x12 with decode format 1.  The CFG register
+ * holds (decode_format << 4) | 3, which is why the vendor's cfg0 is
+ * 0x23 and not 0x13.
+ *
+ * We had 0x12 on channel 0: the packets then stayed unmapped (the
+ * CSID's "captured unmapped long packet header" read 0x2b010405 -- the
+ * data type 0x2b the sensor really sends) and the ISP delivered an
+ * empty frame.
+ */
+static int cam_dt = 0x2b;	/* the data type on the routed channel */
+static int cam_dt_other = 0x12;	/* and the one on the other channel */
+static int lut_cid0 = 0;	/* the CSID's LUT: which VC each entry maps */
+static int lut_cid1 = 1;
+
+static int mipi_config(void)
+{
+	struct csiphy_cfg_data cphy;
+	struct msm_camera_csiphy_params cphy_params;
+	struct csid_cfg_data cid;
+	struct msm_sensor_csid_cfg_params cid_params;
+	struct msm_camera_csid_params cparams;
+	struct msm_camera_csid_lut_params lut;
+	struct msm_camera_csid_vc_cfg vc;
+	struct msm_camera_csid_vc_cfg vc1;
+
+	csiphy_fd = open(cam->csiphy_node, O_RDWR);
+	csid_fd = open(cam->csid_node, O_RDWR);
+	if (csiphy_fd < 0 || csid_fd < 0) {
+		printf("[mipi] open %s/%s: %s\n", cam->csiphy_node,
+		       cam->csid_node, strerror(errno));
+		return -1;
+	}
+
+	/* CSIPHY_INIT maps the PHY's registers */
+	memset(&cphy, 0, sizeof(cphy));
+	cphy.cfgtype = CSIPHY_INIT;
+	if (ioctl(csiphy_fd, VIDIOC_MSM_CSIPHY_IO_CFG, &cphy) < 0)
+		printf("[mipi] CSIPHY_INIT: %s\n", strerror(errno));
+
+	memset(&cphy_params, 0, sizeof(cphy_params));
+	cphy_params.lane_cnt = CAM_LANE_CNT;
+	cphy_params.settle_cnt = 14;
+	cphy_params.lane_mask = CAM_LANE_MASK;
+	cphy_params.combo_mode = 0;
+	cphy_params.csid_core = cam->csid_core;
+	memset(&cphy, 0, sizeof(cphy));
+	cphy.cfgtype = CSIPHY_CFG;
+	cphy.cfg.csiphy_params = &cphy_params;
+	cphy.cfg_params_size = sizeof(cphy_params);
+	if (ioctl(csiphy_fd, VIDIOC_MSM_CSIPHY_IO_CFG, &cphy) < 0)
+		printf("[mipi] CSIPHY_CFG: %s\n", strerror(errno));
+	else
+		printf("[mipi] CSIPHY configured: %d lanes, mask 0x%x, csid %d\n",
+		       cphy_params.lane_cnt, cphy_params.lane_mask, cphy_params.csid_core);
+
+	/* CSID_INIT likewise */
+	memset(&cid, 0, sizeof(cid));
+	cid.cfgtype = CSID_INIT;
+	if (ioctl(csid_fd, VIDIOC_MSM_CSID_IO_CFG, &cid) < 0)
+		printf("[mipi] CSID_INIT: %s\n", strerror(errno));
+
+	memset(&vc, 0, sizeof(vc));
+	vc.cid = lut_cid0;		/* the channel the ISP-IF routes */
+	vc.dt = cam_dt;
+	vc.decode_format = 2;
+	memset(&vc1, 0, sizeof(vc1));
+	vc1.cid = lut_cid1;		/* the other channel */
+	vc1.dt = cam_dt_other;
+	vc1.decode_format = 1;
+	memset(&lut, 0, sizeof(lut));
+	/* The CSID's LUT is indexed by the virtual channel the sensor
+	 * uses; the vendor's camera programs both of them. */
+	lut.num_cid = 2;
+	lut.vc_cfg[0] = &vc;
+	lut.vc_cfg[1] = &vc1;
+	lut.vc_cfg_size = sizeof(vc);
+	memset(&cparams, 0, sizeof(cparams));
+	cparams.lane_cnt = CAM_LANE_CNT;
+	cparams.lane_assign = CAM_LANE_ASSIGN;
+	cparams.phy_sel = 0;
+	cparams.lut_params = lut;
+	memset(&cid_params, 0, sizeof(cid_params));
+	cid_params.csid_params = &cparams;
+	cid_params.csid_params_size = sizeof(cparams);
+	memset(&cid, 0, sizeof(cid));
+	cid.cfgtype = CSID_CFG;
+	cid.cfg.csid_cfg_params = cid_params;
+	if (ioctl(csid_fd, VIDIOC_MSM_CSID_IO_CFG, &cid) < 0)
+		printf("[mipi] CSID_CFG: %s\n", strerror(errno));
+	else
+		printf("[mipi] CSID configured: %d lanes, assign 0x%x\n",
+		       cparams.lane_cnt, cparams.lane_assign);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * the ISP
+ * ------------------------------------------------------------------ */
+static int isp_fd = -1;
+
+/* the ISP's buffer manager handle and the AXI stream handle: the
+ * camera2 HAL uses them in every per-frame ioctl. */
+static unsigned int isp_buf_handle;
+static unsigned int isp_stream_handle;
+/*
+ * There are two VFE subdevices on this device: the 8974's (vfe32) and
+ * a vfe40.  Which one the rear camera's CSID feeds decides where the
+ * frames come out, and the subdevice number is the only way to tell
+ * them apart at run time, so it can be chosen.
+ */
+static int isp_vfe = 0;		/* which subdev: 0 = 13, 1 = 14 */
+static unsigned int pix_clk_override;	/* the CAMIF's pixel clock */
+static int ispif_vfe = 0;		/* which VFE the ISP-IF routes into */
+
+static int isp_open(void)
+{
+	static const char *cands[] = {
+		"/dev/v4l-subdev13", "/dev/v4l-subdev14", NULL
+	};
+	int i;
+
+	if (isp_fd >= 0)
+		return isp_fd;
+	for (i = 0; cands[i]; i++) {
+		if ((isp_vfe == 0) != (i == 0))
+			continue;
+		int fd = open(cands[i], O_RDWR);
+		if (fd < 0)
+			continue;
+		printf("[isp] %s open\n", cands[i]);
+		isp_fd = fd;
+		return isp_fd;
+	}
+	printf("[isp] no vfe subdevice: %s\n", strerror(errno));
+	return -1;
+}
+
+/* the client's buffers, so that the server can hand them to the ISP */
+struct client_buffers {
+	volatile int	count;
+	int		width;
+	int		height;
+	struct v4l2_buffer	buf[8];
+	struct v4l2_plane	planes[8][3];
+};
+static struct client_buffers cbufs;
+static int client_buf_fd[8];
+
+/* latest QVGA frame slot */
+static pthread_mutex_t frame_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* The panel and the Krux UI are portrait.  The sensor delivers a landscape
+ * 1640x1232 frame, so the daemon rotates it 90 degrees counter-clockwise
+ * while downscaling: the viewfinder then matches how the phone is held. */
+#define OUT_W 720
+#define OUT_H 960
+/*
+ * The full-resolution path uses, by default, a square centre crop
+ * (2160x2160 averaged 2x2 to 1080x1080): the QR finder pass needs the
+ * code large in the preview, and the whole frame (960x1280 by the
+ * "fov" state knob at 1) makes it too small to locate reliably.  The
+ * binned path keeps the whole 3:4 frame at 720x960, as before.
+ */
+#define FULL_CROP 2160
+static int out_w = OUT_W, out_h = OUT_H;	/* published preview */
+static int crop_w, crop_h;			/* the sensor window */
+static int crop_x, crop_y;
+/* The source row stride.  The raw paths fill a width-wide buffer; the
+ * PIX/CPP path writes a packed 1280x960 luma block at the start of the
+ * (much larger) allocation, so its stride is 1280, not the allocation
+ * width.  Reading it at 3280 is what smeared the picture into a band. */
+static int read_stride;
+
+static unsigned char *latest_y = NULL;
+
+/*
+ * Write the published preview and the sensor window to files, so the
+ * picture can be looked at on the host.  The preview is what the
+ * camera page shows; the window is what the sensor sent.
+ */
+#ifdef KRUX_RELEASE
+/* No frame dumps in a delivered build: the pictures can show a
+ * seed, an xprv or a PSBT. */
+static void dump_frames(const unsigned char *src_y)
+{
+	(void)src_y;
+}
+#else
+static void dump_frames(const unsigned char *src_y)
+{
+	FILE *f;
+
+#ifdef KRUX_RELEASE
+	/* pictures of the screen, some of which show a seed or a QR */
+	(void)src_y;
+	return;
+#endif
+	/*
+	 * These are camera pictures: the preview and the sensor window.
+	 * The QR page can show a seed, an xprv or a PSBT in them, so a
+	 * dump is a persistent copy of a secret on the data partition.
+	 * Nothing may call this in a delivered build; the host tools set
+	 * CAMD_ALLOW_DUMPS for the bench.
+	 */
+	if (!getenv("CAMD_ALLOW_DUMPS"))
+		return;
+	f = fopen("/data/krux/scan.raw.tmp", "wb");
+	if (f) {
+		fwrite(latest_y, 1, (size_t)out_w * out_h, f);
+		fclose(f);
+		rename("/data/krux/scan.raw.tmp", "/data/krux/scan.raw");
+	}
+	f = fopen("/data/krux/scan_full.raw.tmp", "wb");
+	if (f) {
+		fwrite(src_y, 1, (size_t)crop_w * crop_h, f);
+		fclose(f);
+		rename("/data/krux/scan_full.raw.tmp",
+		       "/data/krux/scan_full.raw");
+	}
+	{
+		unsigned char mx = 0;
+		int mi;
+
+		for (mi = 0; mi < out_w * out_h; mi++)
+			if (latest_y[mi] > mx)
+				mx = latest_y[mi];
+		printf("[client] dumped the preview and the source\n");
+	}
+}
+
+/*
+ * The cached copy of the sensor window.  The ION frame is uncached, and
+ * a wide memcpy reads it at ~250 MB/s against ~20 MB/s for byte reads,
+ * so the window is copied once per frame and everything else reads the
+ * copy.  Two buffers let the control thread crop the last published
+ * copy for a QR retry without racing the capture thread, which only
+ * ever writes the other one.
+ */
+#endif
+
+static unsigned char *bounce_buf[2];
+static int bounce_pub = -1;
+static pthread_mutex_t bounce_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Sampled mean of the latest downscaled frame.  The AF waits for a
+ * reasonably bright frame, so a refocus request made while the camera
+ * is pointed at a dark wall stays pending until the QR is in view. */
+static int latest_mean;
+static unsigned char *latest_uv = NULL;
+static int latest_seq = 0;
+static int latest_ready = 0;
+
+/* ------------------------------------------------------------------ *
+ * the shared-memory frame
+ *
+ * The socket copy of a 691 KB preview is the preview's bottleneck
+ * (~240 ms at ~4.3 MB/s).  The daemon also publishes the luma into a
+ * POSIX shared-memory region; the firmware maps it and reads the
+ * frame directly, so the copy is gone.  Only the luma is shared: the
+ * firmware reads and discards the chroma today, and the picture is
+ * built grey from the luma.
+ *
+ * A seqlock protects the reader from a torn frame: the writer makes
+ * the sequence odd while it writes and even when done.
+ * ------------------------------------------------------------------ */
+#define SHM_PATH "/tmp/krux/frame"
+#define SHM_MAGIC 0x4b435246u	/* "KCRF" */
+struct shm_frame_hdr {
+	volatile uint32_t seq;	/* odd = writing, even = stable */
+	uint32_t magic;
+	uint32_t w, h;		/* the published image */
+	uint32_t y_size;
+	uint32_t frame_seq;	/* the publish counter */
+	uint32_t sweeping;	/* the AF sweep is running */
+	uint32_t src_w, src_h;	/* the sensor window the preview came from */
+};
+static int shm_fd = -1;
+static unsigned char *shm_base;
+static size_t shm_size;
+
+static void shm_init(void)
+{
+	struct shm_frame_hdr *h;
+
+	shm_size = sizeof(*h) + (size_t)out_w * out_h;
+	shm_fd = open(SHM_PATH, O_RDWR | O_CREAT, 0666);
+	if (shm_fd >= 0)
+		fchmod(shm_fd, 0600);	/* the preview is a picture */
+	if (shm_fd < 0) {
+		printf("[shm] open %s: %s\n", SHM_PATH, strerror(errno));
+		return;
+	}
+	if (ftruncate(shm_fd, shm_size) < 0) {
+		printf("[shm] ftruncate: %s\n", strerror(errno));
+		close(shm_fd);
+		shm_fd = -1;
+		return;
+	}
+	shm_base = mmap(NULL, shm_size, PROT_READ | PROT_WRITE,
+			MAP_SHARED, shm_fd, 0);
+	if (shm_base == MAP_FAILED) {
+		printf("[shm] mmap: %s\n", strerror(errno));
+		shm_base = NULL;
+		close(shm_fd);
+		shm_fd = -1;
+		return;
+	}
+	h = (struct shm_frame_hdr *)shm_base;
+	h->seq = 0;
+	h->w = out_w;
+	h->h = out_h;
+	h->y_size = out_w * out_h;
+	h->src_w = crop_w;
+	h->src_h = crop_h;
+	h->magic = SHM_MAGIC;
+	printf("[shm] %s: %zu bytes\n", SHM_PATH, shm_size);
+}
+
+/* Called from the capture thread with the frame lock held. */
+static void shm_publish(void)
+{
+	struct shm_frame_hdr *h;
+	unsigned char *dst;
+
+	if (!shm_base)
+		return;
+	h = (struct shm_frame_hdr *)shm_base;
+	dst = shm_base + sizeof(*h);
+	h->seq++;		/* odd: a write is in progress */
+	__sync_synchronize();
+	memcpy(dst, latest_y, (size_t)out_w * out_h);
+	h->frame_seq = (uint32_t)latest_seq;
+	h->sweeping = af_sweeping ? 1 : 0;
+	__sync_synchronize();
+	h->seq++;		/* even: the frame is stable */
+}
+
+/* ------------------------------------------------------------------ *
+ * the QR crop
+ *
+ * The preview is a rotated, downscaled view of the sensor window, so a
+ * code that the finder pass locates in the preview may be too small to
+ * decode there.  The firmware sends the box back in preview pixels; we
+ * map it to the sensor window and publish that rectangle 1:1 into a
+ * second shared region.  The crop is taken from the cached bounce
+ * buffer, so it costs a small memcpy, not a second sensor read.
+ * ------------------------------------------------------------------ */
+#define CROP_PATH "/tmp/krux/crop"
+#define CROP_MAX 1280		/* the decoder's image limit */
+
+static int crop_shm_fd = -1;
+static unsigned char *crop_shm_base;
+static size_t crop_shm_size;
+
+static void crop_shm_init(void)
+{
+	struct shm_frame_hdr *h;
+
+	crop_shm_size = sizeof(*h) + (size_t)CROP_MAX * CROP_MAX;
+	crop_shm_fd = open(CROP_PATH, O_RDWR | O_CREAT, 0666);
+	if (crop_shm_fd >= 0)
+		fchmod(crop_shm_fd, 0600);	/* the QR crop is a picture */
+	if (crop_shm_fd < 0) {
+		printf("[crop] open %s: %s\n", CROP_PATH, strerror(errno));
+		return;
+	}
+	if (ftruncate(crop_shm_fd, crop_shm_size) < 0) {
+		printf("[crop] ftruncate: %s\n", strerror(errno));
+		close(crop_shm_fd);
+		crop_shm_fd = -1;
+		return;
+	}
+	crop_shm_base = mmap(NULL, crop_shm_size, PROT_READ | PROT_WRITE,
+			     MAP_SHARED, crop_shm_fd, 0);
+	if (crop_shm_base == MAP_FAILED) {
+		printf("[crop] mmap: %s\n", strerror(errno));
+		crop_shm_base = NULL;
+		close(crop_shm_fd);
+		crop_shm_fd = -1;
+		return;
+	}
+	h = (struct shm_frame_hdr *)crop_shm_base;
+	h->seq = 0;
+	h->magic = SHM_MAGIC;
+	h->w = 0;
+	h->h = 0;
+	h->y_size = 0;
+	h->src_w = crop_w;
+	h->src_h = crop_h;
+	printf("[crop] %s: %zu bytes\n", CROP_PATH, crop_shm_size);
+}
+
+/* The inverse of the preview downscale: preview (px,py) to the sensor
+ * window.  The preview is rotated 90 degrees counter-clockwise, so the
+ * preview's x runs along the source's y and vice versa. */
+static void preview_to_src(int px, int py, int *sx, int *sy)
+{
+	*sx = (out_h - 1 - py) * crop_w / out_h;
+	*sy = px * crop_h / out_w;
+}
+
+/* Publish the preview rectangle (px,py,pw,ph) at 1:1 from the last
+ * bounce.  Returns 0 on success. */
+static int crop_publish(int px, int py, int pw, int ph)
+{
+	struct shm_frame_hdr *h;
+	int ax, ay, bx, by, cx, cy, dx, dy;
+	int x0, y0, x1, y1, w, hh, y;
+	unsigned char *dst;
+	int b;
+
+	if (!crop_shm_base || pw <= 0 || ph <= 0)
+		return -1;
+
+	preview_to_src(px, py, &ax, &ay);
+	preview_to_src(px + pw - 1, py, &bx, &by);
+	preview_to_src(px, py + ph - 1, &cx, &cy);
+	preview_to_src(px + pw - 1, py + ph - 1, &dx, &dy);
+
+	x0 = ax < bx ? ax : bx;
+	if (cx < x0) x0 = cx;
+	if (dx < x0) x0 = dx;
+	x1 = ax > bx ? ax : bx;
+	if (cx > x1) x1 = cx;
+	if (dx > x1) x1 = dx;
+	y0 = ay < by ? ay : by;
+	if (cy < y0) y0 = cy;
+	if (dy < y0) y0 = dy;
+	y1 = ay > by ? ay : by;
+	if (cy > y1) y1 = cy;
+	if (dy > y1) y1 = dy;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > crop_w - 1) x1 = crop_w - 1;
+	if (y1 > crop_h - 1) y1 = crop_h - 1;
+	w = x1 - x0 + 1;
+	hh = y1 - y0 + 1;
+	if (w <= 0 || hh <= 0)
+		return -1;
+	if (w > CROP_MAX) w = CROP_MAX;
+	if (hh > CROP_MAX) hh = CROP_MAX;
+
+	pthread_mutex_lock(&bounce_mutex);
+	b = bounce_pub;
+	if (b < 0 || !bounce_buf[b]) {
+		pthread_mutex_unlock(&bounce_mutex);
+		return -1;
+	}
+	h = (struct shm_frame_hdr *)crop_shm_base;
+	dst = crop_shm_base + sizeof(*h);
+	h->seq++;
+	__sync_synchronize();
+	for (y = 0; y < hh; y++)
+		memcpy(dst + (size_t)y * w,
+		       bounce_buf[b] + (size_t)(y0 + y) * crop_w + x0,
+		       (size_t)w);
+	h->w = w;
+	h->h = hh;
+	h->y_size = w * hh;
+	h->frame_seq = (uint32_t)latest_seq;
+	h->src_w = crop_w;
+	h->src_h = crop_h;
+	__sync_synchronize();
+	h->seq++;
+	pthread_mutex_unlock(&bounce_mutex);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * the ISP's configuration: the chromatrix and the rest of the camera2
+ * "cam_config", captured from the vendor HAL (cam_config.h)
+ * ------------------------------------------------------------------ */
+/*
+ * The camera2 stack hands the ISP its configuration with
+ * VIDIOC_MSM_VFE_REG_CFG: a list of struct msm_vfe_reg_cfg_cmd blocks
+ * (register writes, mask writes and DMI table uploads) plus one data
+ * blob.  The vendor HAL sends it once when the camera is configured and
+ * then again for every frame; the bytes are in cam_config.h, captured
+ * from the vendor HAL itself, so nothing of the vendor's is needed at
+ * run time.
+ */
+static int replay_config = 1;	/* the initial configuration */
+/*
+ * How many of the vendor's initial ISP uploads to send; -1 = all.
+ * This is the bisection knob, and it lives on /data (persistent)
+ * because /tmp is a tmpfs: /data/krux/ispcfg holds the count.
+ */
+static int isp_cfg_count = -1;
+static int full_chroma;		/* full-height CBCR + full-size buffer */
+static int replay_cycle = 1;	/* and the per-frame cycle */
+
+static int isp_replay(const struct cam_upload *u, int n, const char *what)
+{
+	struct msm_vfe_cfg_cmd2 cmd;
+	int i, bad = 0;
+
+	if (isp_open() < 0)
+		return -1;
+	for (i = 0; i < n; i++) {
+		memset(&cmd, 0, sizeof(cmd));
+		cmd.num_cfg = u[i].num_cfg;
+		cmd.cmd_len = u[i].cmd_len;
+		cmd.cfg_cmd = (void *)u[i].blocks;
+		cmd.cfg_data = (void *)u[i].data;
+		if (ioctl(isp_fd, VIDIOC_MSM_VFE_REG_CFG, &cmd) < 0) {
+			printf("[isp] REG_CFG %d (%u blocks, %u bytes): %s\n",
+			       i, u[i].num_cfg, u[i].cmd_len, strerror(errno));
+			bad++;
+		}
+	}
+	printf("[isp] %s: %d uploads sent, %d failed\n", what, n, bad);
+	fflush(stdout);
+	return bad ? -1 : 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * the ISP-IF: the piece between the CSID and the ISP
+ * ------------------------------------------------------------------ */
+/*
+ * The camera2 stack tells the ISP-IF how the two are connected -- which
+ * CSID, which virtual channel, which VFE interface -- and then starts
+ * it.  Without this the CSID receives the sensor's packets and drops
+ * them: we measured 11,808 of them, with no ECC and no CRC errors,
+ * and no frame ever came out.
+ *
+ * The values here are the ones the HAL uses, and the ones the device
+ * itself shows: the IMX179 sends its packets on **virtual channel 1**
+ * (the CSID's "unmapped long packet header" is 0x1201040a, whose VC
+ * field is 1), and the rear camera is on **CSID 0** (the device tree
+ * says qcom,csid-sd-index = <0>).
+ */
+static int ispif_fd = -1;
+static int cam_cid = CID0;	/* the virtual channel (the vendor routes cid 0) */
+static int cam_csid = CSID0;	/* the rear camera's CSID */
+
+static int ispif_ioctl(struct ispif_cfg_data *cfg, const char *what)
+{
+	if (ioctl(ispif_fd, VIDIOC_MSM_ISPIF_CFG, cfg) < 0) {
+		printf("[ispif] %s: %s\n", what, strerror(errno));
+		return -1;
+	}
+	printf("[ispif] %s ok\n", what);
+	return 0;
+}
+
+static int ispif_config(void)
+{
+	struct ispif_cfg_data cfg;
+
+	if (ispif_fd < 0) {
+		ispif_fd = open(ISPIF_NODE, O_RDWR);
+		if (ispif_fd < 0) {
+			printf("[ispif] open %s: %s\n", ISPIF_NODE,
+			       strerror(errno));
+			return -1;
+		}
+		printf("[ispif] %s open\n", ISPIF_NODE);
+	}
+
+	/* the VFE's information */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfg_type = ISPIF_SET_VFE_INFO;
+	cfg.vfe_info.num_vfe = 1;
+	cfg.vfe_info.info[0].max_resolution = 3264 * 2448;
+	cfg.vfe_info.info[0].id = 0;
+	cfg.vfe_info.info[0].ver = 0;
+	if (ispif_ioctl(&cfg, "SET_VFE_INFO") < 0)
+		return -1;
+
+	/* the CSID's hardware version */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfg_type = ISPIF_INIT;
+	cfg.csid_version = CSID_VERSION_V30;
+	if (ispif_ioctl(&cfg, "INIT") < 0)
+		return -1;
+
+	/* the routing */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfg_type = ISPIF_CFG;
+	cfg.params.num = 1;
+	cfg.params.entries[0].vfe_intf = ispif_vfe ? VFE1 : VFE0;
+	cfg.params.entries[0].intftype = PIX0;
+	/*
+	 * The channels the interface takes.  The vendor asks for one
+	 * (cid 0), but the packets arrive on cid 1 under our kernel, and
+	 * the ISP-IF takes a MASK of channels -- so it can be given
+	 * both, and the one that carries the image is the one the CSID
+	 * maps the image's data type to.
+	 *
+	 * (Giving it cid 1 alone crashes the kernel: the path for a
+	 * single non-zero cid is not exercised anywhere else.)
+	 */
+	if (two_cids) {
+		cfg.params.entries[0].num_cids = 2;
+		cfg.params.entries[0].cids[0] = 0;
+		cfg.params.entries[0].cids[1] = 1;
+	} else {
+		cfg.params.entries[0].num_cids = 1;
+		cfg.params.entries[0].cids[0] = cam_cid;	/* the vendor routes cid 0 */
+	}
+	cfg.params.entries[0].csid = cam_csid;
+	/*
+	 * The crop has to be enabled: msm_ispif_enable_crop() -- the
+	 * function that sets the PIX0 enable bit in CTRL_0 -- is only
+	 * called when crop_enable is set, so without it the ISP's
+	 * pixel input is never switched on and no data ever arrives
+	 * (measured: CTRL_0 stayed 0x40, the enable bit 0x80 missing).
+	 * The window is the same one the ISP's own CAMIF uses.
+	 */
+	/*
+	 * The crop has to be enabled.  msm_ispif_enable_crop() -- the
+	 * function that sets the PIX0 enable bit in CTRL_0 -- is only
+	 * called when crop_enable is set (msm_ispif.c, the config
+	 * handler), so with crop_enable 0 the ISP-IF's pixel path is
+	 * never switched on and no data ever arrives: the frame comes
+	 * back with bytesused 0.
+	 *
+	 * The window is the CAMIF's own: the first pixel and the last
+	 * pixel of the line the sensor sends.
+	 */
+	cfg.params.entries[0].crop_enable = crop_enable;
+	cfg.params.entries[0].crop_start_pixel = 0;
+	cfg.params.entries[0].crop_end_pixel =
+		cam->binned ? 1639 : cam->width - 1;	/* full line: 1639 / 3279 */
+	if (ispif_ioctl(&cfg, "CFG") < 0)
+		return -1;
+
+	/* go */
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfg_type = ISPIF_START_FRAME_BOUNDARY;
+	cfg.params.num = 1;
+	cfg.params.entries[0].vfe_intf = ispif_vfe ? VFE1 : VFE0;
+	cfg.params.entries[0].intftype = PIX0;
+	cfg.params.entries[0].num_cids = 1;
+	cfg.params.entries[0].cids[0] = cam_cid;	/* the vendor routes cid 0 */
+	cfg.params.entries[0].csid = cam_csid;
+	/*
+	 * The crop has to be enabled.  msm_ispif_enable_crop() -- the
+	 * function that sets the PIX0 enable bit in CTRL_0 -- is only
+	 * called when crop_enable is set (msm_ispif.c, the config
+	 * handler), so with crop_enable 0 the ISP-IF's pixel path is
+	 * never switched on and no data ever arrives: the frame comes
+	 * back with bytesused 0.
+	 *
+	 * The window is the CAMIF's own: the first pixel and the last
+	 * pixel of the line the sensor sends.
+	 */
+	cfg.params.entries[0].crop_enable = crop_enable;
+	cfg.params.entries[0].crop_start_pixel = 0;
+	cfg.params.entries[0].crop_end_pixel =
+		cam->binned ? 1639 : cam->width - 1;	/* full line: 1639 / 3279 */
+	if (ispif_ioctl(&cfg, "START_FRAME_BOUNDARY") < 0)
+		return -1;
+
+	return 0;
+}
+
+/* The CPP's node, kept open for the whole run: the chromatrix has to
+ * be handed to the CPP once per frame (the camera2 HAL does exactly
+ * that -- the kernel logs 256 CPP CFG ioctls for 256 frames), because
+ * the kernel patches the frame's current buffer addresses into the
+ * frame message when it accepts it, and the buffers rotate. */
+static int cpp_fd = -1;
+/* The ISP fills the capture buffers round-robin, and the CPP reads the
+ * frame from the buffer index given in input_buffer_info.  Sending a fixed
+ * index 0 made the CPP read an empty buffer for most frames, which is the
+ * mostly-dark preview with an occasional correct frame.  Track the next
+ * buffer the ISP will fill from the capture loop. */
+static volatile int cpp_input_index = 0;
+/* Incremented by every frame request from the firmware.  When it stops
+ * moving, the capture thread skips the expensive downscale/AF work so an
+ * idle camera page does not keep a core busy. */
+static volatile unsigned frame_requests;
+/* The ISP consumes capture buffers in the order they were queued, so the
+ * buffer it is about to fill is the head of this FIFO.  Guessing from the
+ * last dequeue instead made every other frame read an unwritten buffer. */
+static int camd_q[16];
+static int camd_q_head;
+static int camd_q_tail;
+static int camd_q_count;
+
+
+/*
+ * The chromatrix message can be replaced from the data partition: a
+ * file of 32-bit words, most significant byte first as written by the
+ * host.  The vendor's message was captured from their camera stack and
+ * carries their preview geometry (1280x960); this sensor mode's frames
+ * are 1640x1232, and the stripe table has to be brought up to that or
+ * part of the frame is never written.  Having it in a file means the
+ * geometry can be tried without rebuilding the daemon.
+ */
+static unsigned int *cpp_msg = cam_cpp_msg;
+static int cpp_msg_words = CAM_CPP_MSG_WORDS;
+
+static void cpp_msg_load(void)
+{
+	static unsigned int buf[1024];
+	const char *path = "/data/krux/cppmsg.bin";
+	FILE *f;
+	size_t n;
+
+	/*
+	 * The vendor's five stripes, unchanged.
+	 *
+	 * A single stripe covering the code gives a much cleaner picture
+	 * -- the Sparrow UR code decodes from it -- but the CPP's
+	 * firmware evidently needs the stripes to tile the frame: with
+	 * one, its processing queue fills and never completes, and the
+	 * camera stops delivering frames.  So the five stay until their
+	 * rectangles are rebuilt for this frame size (1640x1232), which
+	 * is where the banded preview comes from.
+	 */
+	cpp_msg = cam_cpp_msg;
+	cpp_msg_words = CAM_CPP_MSG_WORDS;
+
+	f = fopen(path, "rb");
+	if (!f) {
+		printf("[cpp] frame message: one stripe (%d words)\n",
+		       cpp_msg_words);
+		return;
+	}
+	n = fread(buf, sizeof(unsigned int), sizeof(buf) / sizeof(buf[0]), f);
+	fclose(f);
+	if (n < 40 || buf[0] != 0x3e646d63 || buf[n - 1] != 0xabcdefaa) {
+		printf("[cpp] %s: not a frame message (%u words), ignored\n",
+		       path, (unsigned)n);
+		return;
+	}
+	cpp_msg = buf;
+	cpp_msg_words = (int)n;
+	printf("[cpp] frame message from %s: %d words\n", path, cpp_msg_words);
+}
+
+/* Hand the chromatrix to the CPP.  Returns 0 on success. */
+static int cpp_send_chromatrix(void)
+{
+	struct msm_camera_v4l2_ioctl_t io;
+	struct msm_cpp_frame_info_t frame;
+	int32_t cpp_status = 0;
+
+	if (cpp_fd < 0)
+		return -1;
+
+	memset(&frame, 0, sizeof(frame));
+	/* The vendor camera HAL drives the CPP in offline mode with native
+	 * ION buffers: it names the exact input fd for each frame.  Realtime
+	 * mode (frame_type 1) does not match what the firmware expects for
+	 * this sensor mode. */
+	frame.frame_type = 0;
+	frame.msg_len = cpp_msg_words;
+	frame.cpp_cmd_msg = cpp_msg;
+	frame.status = &cpp_status;
+	frame.identity = ((uint32_t)session_id << 16) | (uint32_t)0;
+	frame.input_buffer_info.index = (uint32_t)cpp_input_index;
+	frame.input_buffer_info.fd = client_buf_fd[cpp_input_index];
+	frame.input_buffer_info.native_buff = 1;
+
+	memset(&io, 0, sizeof(io));
+	io.id = session_id;
+	io.len = sizeof(frame);
+	io.trans_code = 0;
+	io.ioctl_ptr = &frame;
+	if (ioctl(cpp_fd, VIDIOC_MSM_CPP_CFG, &io) < 0) {
+		printf("[cpp] CFG: %s\n", strerror(errno));
+		return -1;
+	}
+	/*
+	 * The chromatrix goes to the CPP for every frame, so this line
+	 * would be printed a hundred times a second and the log lives
+	 * on the data partition.  Print it now and then.
+	 */
+	{
+		static int sent_n;
+
+		if (sent_n++ % 100 == 0)
+			printf("[cpp] chromatrix sent (%d words, status %d)\n",
+			       frame.msg_len, cpp_status);
+	}
+	return 0;
+}
+
+/*
+ * Drain the CPP's completed-frame queue.
+ *
+ * The CPP enqueues one processed-frame entry per frame
+ * (msm_cpp_notify_frame_done), and only
+ * VIDIOC_MSM_CPP_GET_EVENTPAYLOAD takes one out.  Nothing did, so the
+ * kernel list grew without bound -- dmesg's "queue eventdata new max
+ * is N" climbing into the thousands -- until the box ran out of memory
+ * and hard-locked, often on the main screen with no camera page open.
+ *
+ * The driver used to dereference a NULL dequeue on an empty queue, so
+ * this could not be done safely from userspace; the kernel now returns
+ * -ENODATA instead (see the msm_cpp.c change).  The CPP's v4l2
+ * frame-done event says a payload is ready, so drain one per event.
+ */
+static void *cpp_event_thread(void *arg)
+{
+	struct v4l2_event_subscription sub;
+	(void)arg;
+
+	/* Anything left from an earlier session. */
+	for (;;) {
+		struct msm_camera_v4l2_ioctl_t io;
+		struct msm_cpp_frame_info_t info;
+
+		memset(&io, 0, sizeof(io));
+		memset(&info, 0, sizeof(info));
+		io.len = sizeof(info);
+		io.ioctl_ptr = &info;
+		if (ioctl(cpp_fd, VIDIOC_MSM_CPP_GET_EVENTPAYLOAD, &io) < 0)
+			break;
+	}
+
+	memset(&sub, 0, sizeof(sub));
+	sub.type = CPP_FRAME_DONE_EVENT;
+	if (ioctl(cpp_fd, VIDIOC_SUBSCRIBE_EVENT, &sub) < 0)
+		printf("[cpp] subscribe frame-done: %s\n", strerror(errno));
+
+	for (;;) {
+		struct v4l2_event ev;
+		struct msm_camera_v4l2_ioctl_t io;
+		struct msm_cpp_frame_info_t info;
+
+		if (ioctl(cpp_fd, VIDIOC_DQEVENT, &ev) < 0) {
+			struct timespec ts = { 0, 2 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
+			continue;
+		}
+		memset(&io, 0, sizeof(io));
+		memset(&info, 0, sizeof(info));
+		io.id = ev.id;
+		io.len = sizeof(info);
+		io.ioctl_ptr = &info;
+		if (ioctl(cpp_fd, VIDIOC_MSM_CPP_GET_EVENTPAYLOAD, &io) == 0) {
+			static int ev_n;
+			if (++ev_n % 100 == 0)
+				printf("[cpp] ev#%d out=%u in=%u divert=%u\n",
+				       ev_n,
+				       info.output_buffer_info[0].index,
+				       info.input_buffer_info.index,
+				       info.output_buffer_info[0].processed_divert);
+		}
+		/*
+		 * DQEVENT can keep returning events (a fast producer, or
+		 * a spurious repeat) with no sleep on success, which pins
+		 * this thread -- and a whole core -- at ~100%.  The
+		 * drain only has to keep up with the frames, so back off
+		 * a millisecond per event.
+		 */
+		{
+			struct timespec ts = { 0, 1 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
+		}
+	}
+	return NULL;
+}
+
+/* Sum of horizontal gradients in the middle of the frame: a simple,
+ * robust focus metric for the VCM sweep. */
+static unsigned long af_sharpness(const unsigned char *p)
+{
+	int x, y;
+	unsigned long s = 0;
+	int x0 = out_w / 4, x1 = out_w * 3 / 4;
+	int y0 = out_h / 4, y1 = out_h * 3 / 4;
+
+	if (!p)
+		return 0;
+	for (y = y0; y < y1 - 1; y += 2) {
+		const unsigned char *r = p + y * out_w;
+		for (x = x0; x < x1 - 1; x += 2) {
+			int dx = (int)r[x] - (int)r[x + 1];
+			int dy = (int)r[x] - (int)r[x + out_w];
+			s += (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+		}
+	}
+	return s;
+}
+
+static int isp_start(void)
+{
+	struct msm_isp_buf_request breq;
+	struct msm_vfe_axi_stream_request_cmd scmd;
+	struct msm_vfe_axi_stream_cfg_cmd ccmd;
+	struct msm_vfe_input_cfg icfg;
+	int i;
+
+	if (isp_open() < 0)
+		return -1;
+	if (!cbufs.count) {
+		printf("[isp] no client buffers yet\n");
+		return -1;
+	}
+
+	memset(&breq, 0, sizeof(breq));
+	breq.session_id = session_id;
+	breq.stream_id = 0;
+	breq.num_buf = cbufs.count;
+	breq.handle = 0;
+	breq.buf_type = ISP_SHARE_BUF;
+	if (ioctl(isp_fd, VIDIOC_MSM_ISP_REQUEST_BUF, &breq) < 0) {
+		printf("[isp] REQUEST_BUF: %s\n", strerror(errno));
+		return -1;
+	}
+	isp_buf_handle = breq.handle;
+	printf("[isp] REQUEST_BUF ok, handle=%u\n", breq.handle);
+
+	memset(&icfg, 0, sizeof(icfg));
+	icfg.input_src = VFE_PIX_0;
+	icfg.input_pix_clk = pix_clk_override ? pix_clk_override :
+							    cam->pix_clk;
+	icfg.d.pix_cfg.input_mux = CAMIF;
+	icfg.d.pix_cfg.camif_cfg.camif_input = 3;	/* the vendor's value */
+	icfg.d.pix_cfg.camif_cfg.lines_per_frame = cam->height;
+	icfg.d.pix_cfg.camif_cfg.pixels_per_line = cam->width;
+	icfg.d.pix_cfg.camif_cfg.first_pixel = 0;
+	/*
+	 * The window: the camera front end rejects a frame whose geometry
+	 * does not match exactly ("camif violation"), and the vendor's
+	 * own values are the full line and the full frame -- not the
+	 * active area.  These are the values the ROM's camera HAL sends.
+	 */
+	icfg.d.pix_cfg.camif_cfg.last_pixel =
+		cam->binned ? 1639 : cam->width - 1;	/* full line: 1639 / 3279 */
+	icfg.d.pix_cfg.camif_cfg.last_line =
+		cam->binned ? 1231 : cam->height - 1;	/* 1231 / 2463 */
+	icfg.d.pix_cfg.camif_cfg.first_line = 0;
+	icfg.d.pix_cfg.camif_cfg.last_line =
+		cam->binned ? 1231 : cam->height - 1;	/* 1231 / 2463 */
+	icfg.d.pix_cfg.camif_cfg.epoch_line0 = 0;
+	icfg.d.pix_cfg.camif_cfg.epoch_line1 =
+		(isp_stream_src == PIX_VIEWFINDER) ? 0 : cam->height;
+	if (ioctl(isp_fd, VIDIOC_MSM_ISP_INPUT_CFG, &icfg) < 0)
+		printf("[isp] INPUT_CFG: %s\n", strerror(errno));
+	else
+		printf("[isp] input configured: CAMIF %dx%d\n",
+		       cam->width, cam->height);
+
+	memset(&scmd, 0, sizeof(scmd));
+	scmd.session_id = session_id;
+	scmd.stream_id = 0;
+	scmd.output_format = ISP_PIX_FMT_NV12;
+	scmd.stream_src = isp_stream_src;
+	if (isp_stream_src == PIX_VIEWFINDER)
+		scmd.output_format = 0x3132564e;
+	/* QR and entropy use luma only.  The VFE CBCR WM still writes the
+	 * half-height NV12 chroma plane, but it is not in the completion
+	 * group, so a half-height CBCR done cannot desynchronise the Y/C
+	 * ping-pong bits or flood the tasklet queue. */
+	/* QR and entropy need luma only.  Completing on the Y write master
+	 * avoids waiting on a CBCR plane that may not be configured. */
+	scmd.y_only = (isp_stream_src == PIX_VIEWFINDER) ? 0 : 1;
+	scmd.init_frame_drop = (isp_stream_src == PIX_VIEWFINDER) ? 1 : 0;
+	scmd.frame_skip_pattern = NO_SKIP;
+	{
+		int pw = cbufs.width, ph = cbufs.height;
+		if (isp_stream_src == PIX_VIEWFINDER) { pw = 1280; ph = 960; }
+		scmd.plane_cfg[0].output_width = pw;
+		scmd.plane_cfg[0].output_height = ph;
+		scmd.plane_cfg[0].output_stride = pw;
+		scmd.plane_cfg[0].output_scan_lines = ph;
+		scmd.plane_cfg[0].output_plane_format = Y_PLANE;
+		scmd.plane_cfg[1].output_width = pw;
+		/*
+		 * NV12 chroma is normally half-height: its buffer is
+		 * width*height/2.  Full luma height without a full-size
+		 * buffer makes the CBCR write master run past the buffer
+		 * into unmapped IOVA.  CAMD_FULL_CHROMA=1 keeps the CBCR
+		 * plane at full height and allocates a width*height
+		 * chroma buffer, which keeps the Y/C write masters paired
+		 * (no ping-pong mismatch) if the hardware really writes
+		 * a full-height chroma plane.
+		 *
+		 * The vendor preview's chroma plane is 1280x480 padded
+		 * to 512 scan lines, plane format 3 (CRCB, NV21).  The
+		 * exact geometry is part of the request the vendor HAL
+		 * sends; anything else makes the VFE refuse the stream.
+		 */
+		if (isp_stream_src == PIX_VIEWFINDER) {
+			scmd.plane_cfg[1].output_height = 480;
+			scmd.plane_cfg[1].output_scan_lines = 512;
+			scmd.plane_cfg[1].output_plane_format = 3;
+		} else {
+			scmd.plane_cfg[1].output_height =
+				full_chroma ? ph : ph / 2;
+			scmd.plane_cfg[1].output_scan_lines =
+				full_chroma ? ph : ph / 2;
+			scmd.plane_cfg[1].output_plane_format =
+				CBCR_PLANE;
+		}
+		scmd.plane_cfg[1].output_stride = pw;
+	}
+	if (ioctl(isp_fd, VIDIOC_MSM_ISP_REQUEST_STREAM, &scmd) < 0) {
+		printf("[isp] REQUEST_STREAM: %s\n", strerror(errno));
+		return -1;
+	}
+	isp_stream_handle = scmd.axi_stream_handle;
+	printf("[isp] REQUEST_STREAM ok, handle=%u\n", scmd.axi_stream_handle);
+
+
+
+
+
+
+	for (i = 0; i < cbufs.count; i++) {
+		struct msm_isp_qbuf_info q;
+		memset(&q, 0, sizeof(q));
+		q.handle = breq.handle;
+		q.buf_idx = i;
+		q.buffer = cbufs.buf[i];
+		if (ioctl(isp_fd, VIDIOC_MSM_ISP_ENQUEUE_BUF, &q) < 0) {
+			printf("[isp] ENQUEUE_BUF %d: %s\n", i, strerror(errno));
+			return -1;
+		}
+	}
+	printf("[isp] %d buffers enqueued\n", cbufs.count);
+
+	memset(&ccmd, 0, sizeof(ccmd));
+	ccmd.num_streams = 1;
+	ccmd.stream_handle[0] = scmd.axi_stream_handle;
+	ccmd.cmd = START_STREAM;
+	if (ioctl(isp_fd, VIDIOC_MSM_ISP_CFG_STREAM, &ccmd) < 0) {
+		printf("[isp] CFG_STREAM: %s\n", strerror(errno));
+		return -1;
+	}
+	printf("[isp] stream started");
+	/*
+	 * Ask the ISP to hand its frames to the CPP.  With this on, the
+	 * ISP records which buffer it wrote each frame into, and the
+	 * kernel points the CPP at that buffer -- the only way the CPP
+	 * can be sure it reads a frame that exists.  Userspace cannot
+	 * work it out: the ISP and the CPP take their buffers from the
+	 * same pool.
+	 */
+	{
+		struct msm_vfe_axi_stream_update_cmd upd;
+		int done = 0;
+
+		memset(&upd, 0, sizeof(upd));
+		upd.stream_handle = scmd.axi_stream_handle;
+		upd.update_type = ENABLE_STREAM_BUF_DIVERT;
+		if (ioctl(isp_fd, VIDIOC_MSM_ISP_UPDATE_STREAM, &upd) < 0)
+			printf(" (buffer divert: %s)", strerror(errno));
+		else
+			printf(" (buffer divert on)");
+		if (ioctl(isp_fd, VIDIOC_MSM_ISP_CONFIG_DONE, &done) < 0)
+			printf(" (config done: %s)", strerror(errno));
+	}
+	printf("\n");
+	if (replay_config)
+		isp_replay(cam_initial,
+			   isp_cfg_count < 0 ? CAM_INITIAL_COUNT
+					     : isp_cfg_count,
+			   "initial configuration");
+	if (send_capture_config)
+		isp_replay(cam_capture, CAM_CAPTURE_COUNT,
+			   "capture configuration");
+	/* The ISP-IF comes LAST: the ISP's CFG_STREAM(START) resets the
+	 * VFE's registers, so anything written before it is wiped --
+	 * that is why the PIX0 enable bit (CTRL_0 bit 7) was missing. */
+	if (replay_config)
+		ispif_config();
+	if (isp_stream_src == PIX_VIEWFINDER) {
+		int done = 0;
+		ioctl(isp_fd, VIDIOC_MSM_ISP_CONFIG_DONE, &done);
+	}
+
+	/* The CPP: it sits between the ISP and memory, and the camera2
+	 * HAL hands it the chromatrix as a frame message.  Without it
+	 * the ISP's output never leaves the CPP. */
+	if (cpp_fw_path && strcmp(cpp_fw_path, "-") != 0) {
+		struct msm_camera_v4l2_ioctl_t io;
+		struct msm_cpp_frame_info_t frame;
+		int32_t cpp_status = 0;
+		int fd = open(CPP_NODE, O_RDWR | O_NONBLOCK);
+
+		if (fd < 0) {
+			printf("[cpp] open %s: %s\n", CPP_NODE,
+			       strerror(errno));
+		} else {
+			cpp_fd = fd;
+			memset(&frame, 0, sizeof(frame));
+			frame.frame_type = 1;		/* realtime */
+			frame.msg_len = cpp_msg_words;
+			frame.cpp_cmd_msg = cpp_msg;
+			/* The CPP writes the result of the frame
+			 * through this pointer.  Left NULL the copy
+			 * back fails and the whole ioctl is reported
+			 * as an error, even though the chromatrix
+			 * was accepted. */
+			frame.status = &cpp_status;
+			/* The CPP looks its buffer queue up by the
+			 * identity: the session in the top half, the
+			 * stream in the bottom.  Without it the queue
+			 * is not found and the chromatrix is
+			 * rejected. */
+			frame.identity = ((uint32_t)session_id << 16) |
+				(uint32_t)0;	/* the stream */
+
+			/* The CPP needs its buffer queue before it
+			 * will take the chromatrix: the queue is
+			 * what gives it the physical address of the
+			 * buffer the ISP writes into.  ENQUEUE (not
+			 * APPEND) is what *creates* the queue
+			 * entry; APPEND only adds buffers to an
+			 * existing one. */
+			{
+				struct msm_cpp_stream_buff_info_t sbi;
+				struct msm_cpp_buffer_info_t bi[8];
+				int nbufs = cbufs.count > 0 ? cbufs.count : 1;
+				int i;
+
+				if (nbufs > (int)(sizeof(bi) / sizeof(bi[0])))
+					nbufs = (int)(sizeof(bi) / sizeof(bi[0]));
+				memset(bi, 0, sizeof(bi));
+				memset(&sbi, 0, sizeof(sbi));
+				sbi.identity = frame.identity;
+				sbi.num_buffs = nbufs;
+				sbi.buffer_info = bi;
+				/* One entry per buffer, each with the index
+				 * the ISP knows it by (the index of the
+				 * vb2 buffer it was queued as) and the
+				 * file descriptor of the memory
+				 * behind it.  The kernel copies
+				 * num_buffs of them, so the array
+				 * has to be that long -- with one
+				 * entry it reads past the end of it
+				 * and queues stack garbage. */
+				for (i = 0; i < nbufs; i++) {
+					bi[i].fd = cbufs.count > 0 ?
+						client_buf_fd[i] : -1;
+					bi[i].index = i;
+					bi[i].offset = 0;
+					bi[i].native_buff = 0;
+					bi[i].processed_divert = 0;
+				}
+				memset(&io, 0, sizeof(io));
+				io.id = session_id;
+				io.len = sizeof(sbi);
+				io.trans_code = 0;
+				io.ioctl_ptr = &sbi;
+				if (ioctl(fd,
+					VIDIOC_MSM_CPP_ENQUEUE_STREAM_BUFF_INFO,
+					&io) < 0)
+					printf("[cpp] ENQUEUE_STREAM_BUFF_INFO: %s\n",
+					       strerror(errno));
+				else
+					printf("[cpp] buffer queue: %d buffers, fd %d\n",
+					       sbi.num_buffs, bi[0].fd);
+			}
+
+			memset(&io, 0, sizeof(io));
+			io.id = session_id;		/* the session! */
+			io.len = sizeof(frame);
+			io.trans_code = 0;		/* the stream id */
+			io.ioctl_ptr = &frame;
+			if (ioctl(fd, VIDIOC_MSM_CPP_CFG, &io) < 0)
+				printf("[cpp] CFG: %s\n", strerror(errno));
+			else
+				printf("[cpp] chromatrix sent (%d words, status %d)\n",
+				       frame.msg_len, cpp_status);
+			/* The node stays open: the chromatrix has to be
+			 * sent again for every frame (the kernel
+			 * patches the frame's buffer addresses into
+			 * the message when it takes it). */
+		}
+	}
+
+	/* Tell the ISP that the pixel source is live, and that the
+	 * configuration is complete: without these two it never
+	 * processes a frame (the camera2 HAL sends both). */
+	{
+		struct msm_vfe_axi_src_state src;
+		int done = 0;
+
+		memset(&src, 0, sizeof(src));
+		src.input_src = VFE_PIX_0;
+		src.src_active = 1;
+		if (ioctl(isp_fd, VIDIOC_MSM_ISP_SET_SRC_STATE, &src) < 0)
+			printf("[isp] SET_SRC_STATE: %s\n", strerror(errno));
+		else
+			printf("[isp] SET_SRC_STATE ok\n");
+		if (ioctl(isp_fd, VIDIOC_MSM_ISP_CONFIG_DONE, &done) < 0)
+			printf("[isp] CONFIG_DONE: %s\n", strerror(errno));
+		else
+			printf("[isp] CONFIG_DONE ok\n");
+	}
+	return 0;
+}
+
+
+/* ------------------------------------------------------------------ *
+ * the CPP: the kernel loads its firmware from a file
+ * ------------------------------------------------------------------ */
+/*
+ * msm_cpp.c's cpp_load_fw() calls request_firmware() with the name the
+ * user gave it, and the kernel's own loader then looks for that name in
+ * /lib/firmware (and the other built-in paths).  On the ROM the file
+ * lives in /vendor/firmware, which ueventd (the userspace firmware
+ * class) serves; here we put it into /lib/firmware ourselves and let
+ * the kernel pick it up.
+ */
+static int cpp_load_firmware(const char *path)
+{
+	char name[64];
+	const char *base;
+	char buf[16384];
+	int fd, out, n;
+
+	base = strrchr(path, '/');
+	base = base ? base + 1 : path;
+	snprintf(name, sizeof(name), "%s", base);
+
+	/* copy it where the kernel's firmware loader will look */
+	mkdir("/lib", 0755);
+	mkdir("/lib/firmware", 0755);
+	{
+		char dst[128];
+		struct stat src_st, dst_st;
+
+		snprintf(dst, sizeof(dst), "/lib/firmware/%s", name);
+		fd = open(path, O_RDONLY);
+		if (fd < 0) {
+			printf("[cpp] open %s: %s\n", path, strerror(errno));
+			return -1;
+		}
+		/*
+		 * The fallback path is already /lib/firmware/<name>.
+		 * Opening the destination with O_TRUNC in that case
+		 * truncates the source to zero and the CPP then loads
+		 * an empty blob ("Invalid frame message").  Detect the
+		 * same inode before touching it.
+		 */
+		if (stat(path, &src_st) == 0 &&
+		    stat(dst, &dst_st) == 0 &&
+		    src_st.st_dev == dst_st.st_dev &&
+		    src_st.st_ino == dst_st.st_ino) {
+			close(fd);
+			printf("[cpp] %s is already in /lib/firmware\n", name);
+		} else {
+			out = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			if (out < 0) {
+				printf("[cpp] open %s: %s\n", dst, strerror(errno));
+				close(fd);
+				return -1;
+			}
+			while ((n = read(fd, buf, sizeof(buf))) > 0)
+				if (write(out, buf, n) != n) {
+					printf("[cpp] write failed\n");
+					break;
+				}
+			close(fd);
+			close(out);
+			printf("[cpp] %s staged in /lib/firmware\n", name);
+		}
+	}
+
+	/* ask the CPP to load it */
+	fd = open(CPP_NODE, O_RDWR);
+	if (fd < 0) {
+		printf("[cpp] open %s: %s\n", CPP_NODE, strerror(errno));
+		return -1;
+	}
+	{
+		struct msm_camera_v4l2_ioctl_t io;
+		memset(&io, 0, sizeof(io));
+		io.id = 0;
+		io.len = strlen(name) + 1;
+		io.trans_code = 0;
+		io.ioctl_ptr = name;
+		if (ioctl(fd, VIDIOC_MSM_CPP_LOAD_FIRMWARE, &io) < 0) {
+			printf("[cpp] LOAD_FIRMWARE: %s\n", strerror(errno));
+			close(fd);
+			return -1;
+		}
+	}
+	close(fd);
+	printf("[cpp] firmware loaded\n");
+	return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * autofocus (DW9714 VCM)
+ *
+ * The vendor HAL sends the step table to the actuator subdev and then
+ * moves the lens; camd never did, which is why close-up images were soft.
+ * ------------------------------------------------------------------ */
+struct act_reg_params {
+	uint32_t write_type;
+	uint32_t hw_mask;
+	uint16_t reg_addr;
+	uint16_t hw_shift;
+	uint16_t data_shift;
+	uint16_t pad;
+};
+
+struct act_reg_setting {
+	uint16_t reg_addr;
+	uint16_t reg_data;
+};
+
+struct act_region {
+	uint16_t step_bound[2];
+	uint16_t code_per_step;
+};
+
+struct act_damping {
+	uint32_t damping_step;
+	uint32_t damping_delay;
+	uint32_t hw_params;
+};
+
+struct act_move {
+	int8_t dir;
+	int8_t sign_dir;
+	int16_t dest_step_pos;
+	int32_t num_steps;
+	int32_t num_steps_inf_pos;
+	struct act_damping *ringing_params;
+};
+
+struct act_set_info {
+	uint32_t act_type;
+	uint8_t reg_tbl_size;
+	uint8_t pad1;
+	uint16_t data_size;
+	uint16_t init_setting_size;
+	uint16_t pad2;
+	uint32_t i2c_addr;
+	uint32_t addr_type;
+	uint32_t data_type;
+	struct act_reg_params *reg_tbl_params;
+	struct act_reg_setting *init_settings;
+	int16_t initial_code;
+	uint16_t pwd_step;
+	uint16_t region_size;
+	uint16_t pad3;
+	uint32_t total_steps;
+	struct act_region *region_params;
+};
+
+struct act_cfg {
+	int32_t cfgtype;
+	uint8_t is_af_supported;
+	uint8_t pad[3];
+	union {
+		struct act_move move;
+		struct act_set_info set_info;
+		uint32_t cam_name;
+	} cfg;
+};
+
+#define CFG_GET_ACTUATOR_INFO 0
+#define CFG_SET_ACTUATOR_INFO 1
+#define CFG_SET_DEFAULT_FOCUS 2
+#define CFG_MOVE_FOCUS 3
+#define VIDIOC_MSM_ACTUATOR_CFG \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 6, struct act_cfg)
+
+_Static_assert(sizeof(struct act_cfg) == 56, "actuator ioctl ABI");
+_Static_assert(__builtin_offsetof(struct act_cfg, cfg.set_info.reg_tbl_params) == 32,
+	       "actuator set_info layout");
+
+static int actuator_fd = -1;
+/* -1 = leave the lens alone.  Driving the VCM without the vendor's
+ * power-up/default-focus sequence stalls the stream (or worse), so it is
+ * opt-in via /data/krux/focus. */
+
+static int actuator_open(void)
+{
+	DIR *d;
+	struct dirent *e;
+
+	if (actuator_fd >= 0)
+		return 0;
+	d = opendir("/sys/class/video4linux");
+	if (!d)
+		return -1;
+	while ((e = readdir(d)) != NULL) {
+		char path[128], name[64];
+		FILE *f;
+		int fd;
+
+		if (strncmp(e->d_name, "v4l-subdev", 10))
+			continue;
+		snprintf(path, sizeof(path), "/sys/class/video4linux/%s/name",
+			 e->d_name);
+		f = fopen(path, "r");
+		if (!f)
+			continue;
+		if (!fgets(name, sizeof(name), f)) {
+			fclose(f);
+			continue;
+		}
+		fclose(f);
+		if (strncmp(name, "msm_actuator", 12))
+			continue;
+		snprintf(path, sizeof(path), "/dev/%s", e->d_name);
+		fd = open(path, O_RDWR);
+		if (fd < 0)
+			continue;
+		actuator_fd = fd;
+		printf("[af] actuator %s opened\n", path);
+		closedir(d);
+		return 0;
+	}
+	closedir(d);
+	printf("[af] no actuator subdev found\n");
+	return -1;
+}
+
+static int actuator_get_info(void)
+{
+	struct act_cfg cfg;
+
+	if (actuator_open() < 0)
+		return -1;
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfgtype = CFG_GET_ACTUATOR_INFO;
+	if (ioctl(actuator_fd, VIDIOC_MSM_ACTUATOR_CFG, &cfg) < 0) {
+		printf("[af] GET_ACTUATOR_INFO: %s\n", strerror(errno));
+		return -1;
+	}
+	printf("[af] af_supported=%u cam=%d\n", cfg.is_af_supported,
+	       (int)cfg.cfg.cam_name);
+	return 0;
+}
+
+static int actuator_set_default(int dest)
+{
+	struct act_damping damp[1];
+	struct act_cfg cfg;
+
+	if (actuator_fd < 0)
+		return -1;
+	memset(damp, 0, sizeof(damp));
+	/* damping_step must be non-zero: actuator_write_focus() loops
+	 * forever at step 0, flooding the CCI and stalling the stream. */
+	damp[0].damping_step = 1;
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfgtype = CFG_SET_DEFAULT_FOCUS;
+	cfg.cfg.move.dir = 0;
+	cfg.cfg.move.sign_dir = 1;
+	cfg.cfg.move.dest_step_pos = (int16_t)dest;
+	cfg.cfg.move.num_steps = dest;
+	cfg.cfg.move.num_steps_inf_pos = dest;
+	cfg.cfg.move.ringing_params = damp;
+	if (ioctl(actuator_fd, VIDIOC_MSM_ACTUATOR_CFG, &cfg) < 0) {
+		printf("[af] SET_DEFAULT_FOCUS(%d): %s\n", dest,
+		       strerror(errno));
+		return -1;
+	}
+	return 0;
+}
+
+static int actuator_set_info(void)
+{
+	static struct act_reg_params regs[1] = {
+		{ 1, 0x000f, 0xffff, 0, 4, 0 },
+	};
+	static struct act_reg_setting init[4] = {
+		{ 0x00ec, 0x00a3 },
+		{ 0x00a1, 0x000d },
+		{ 0x00f2, 0x00d8 },
+		{ 0x00dc, 0x0051 },
+	};
+	static struct act_region region[1] = {
+		{ { ACT_MACRO_BOUND, ACT_INF_BOUND }, ACT_CODE_PER_STEP },
+	};
+	struct act_cfg cfg;
+
+	if (actuator_fd < 0 && actuator_open() < 0)
+		return -1;
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfgtype = CFG_SET_ACTUATOR_INFO;
+	cfg.cfg.set_info.act_type = 0;
+	cfg.cfg.set_info.reg_tbl_size = 1;
+	cfg.cfg.set_info.data_size = 10;
+	cfg.cfg.set_info.init_setting_size = 4;
+	cfg.cfg.set_info.i2c_addr = 0x18;
+	cfg.cfg.set_info.addr_type = 1;
+	cfg.cfg.set_info.data_type = 1;
+	cfg.cfg.set_info.reg_tbl_params = regs;
+	cfg.cfg.set_info.init_settings = init;
+	cfg.cfg.set_info.initial_code = ACT_INITIAL_CODE;
+	cfg.cfg.set_info.pwd_step = 0;
+	cfg.cfg.set_info.region_size = 1;
+	cfg.cfg.set_info.total_steps = ACT_TOTAL_STEPS;
+	cfg.cfg.set_info.region_params = region;
+	if (ioctl(actuator_fd, VIDIOC_MSM_ACTUATOR_CFG, &cfg) < 0) {
+		printf("[af] SET_ACTUATOR_INFO: %s\n", strerror(errno));
+		return -1;
+	}
+	printf("[af] actuator configured: %d steps, code %d\n",
+	       ACT_TOTAL_STEPS, ACT_INITIAL_CODE);
+	return 0;
+}
+
+static int actuator_move(int step);
+
+/* Move the lens with the sensor paused, then let it stream again. */
+static void af_move(int step)
+{
+	struct timespec ts = { 0, 30 * 1000 * 1000 };
+
+	sensor_write_regs(stream_off_regs, 1);
+	nanosleep(&ts, NULL);
+	actuator_move(step);
+	sensor_write_regs(stream_on_regs, 1);
+	nanosleep(&ts, NULL);
+}
+
+/* Current lens step, as the vendor HAL tracks it. */
+static int act_curr = 7;
+
+static void af_bringup(void)
+{
+	af_level = state_read("af", 2, 0, 4);
+
+	/* Re-read the fixed focus per camera session, so a sweep can be
+	 * enabled or a step changed without restarting camd.  There is no
+	 * fixed step by default: -1 means "sweep". */
+	focus_step = state_read("focus", -1, -1, ACT_TOTAL_STEPS - 1);
+	if (focus_step < 0)
+		focus_step = -1;
+
+	if (af_level < 1)
+		return;
+	if (actuator_get_info() != 0)
+		return;
+	if (af_level < 2)
+		return;
+	if (actuator_set_info() != 0)
+		return;
+	if (af_level >= 3)
+		actuator_set_default(7);
+	if (af_level >= 4)
+		actuator_move(focus_step >= 0 ? focus_step : 7);
+}
+
+static int actuator_move(int step)
+{
+	struct act_damping damp[1];
+	struct act_cfg cfg;
+	int dir, sign, n;
+
+	if (actuator_fd < 0)
+		return -1;
+	if (step < 0)
+		step = 0;
+	if (step >= ACT_TOTAL_STEPS)
+		step = ACT_TOTAL_STEPS - 1;
+
+	/* The HAL's convention, captured from actuator_seq.log:
+	 *   increasing step -> dir=0, sign=+1 (towards macro)
+	 *   decreasing step -> dir=1, sign=-1 (towards infinity)
+	 * and num_steps is the distance moved. */
+	if (step >= act_curr) {
+		dir = 0;
+		sign = 1;
+		n = step - act_curr;
+	} else {
+		dir = 1;
+		sign = -1;
+		n = act_curr - step;
+	}
+
+	memset(damp, 0, sizeof(damp));
+	damp[0].damping_step = 1;
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.cfgtype = CFG_MOVE_FOCUS;
+	cfg.cfg.move.dir = (int8_t)dir;
+	cfg.cfg.move.sign_dir = (int8_t)sign;
+	cfg.cfg.move.dest_step_pos = (int16_t)step;
+	cfg.cfg.move.num_steps = n;
+	cfg.cfg.move.num_steps_inf_pos = n;
+	cfg.cfg.move.ringing_params = damp;
+	if (ioctl(actuator_fd, VIDIOC_MSM_ACTUATOR_CFG, &cfg) < 0) {
+		printf("[af] MOVE_FOCUS(%d): %s\n", step, strerror(errno));
+		return -1;
+	}
+	act_curr = step;
+	return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * the server thread
+ * ------------------------------------------------------------------ */
+static volatile int server_ready;
+
+static void *server_thread(void *arg)
+{
+	unsigned char buf[EVSZ];
+	int fd = open(CONFIG_NODE, O_RDWR | O_NONBLOCK);
+	unsigned id;
+
+	if (fd < 0) {
+		printf("[server] open %s: %s\n", CONFIG_NODE, strerror(errno));
+		return NULL;
+	}
+	for (id = MSM_CAMERA_NEW_SESSION; id <= MSM_CAMERA_MSM_NOTIFY; id++) {
+		struct v4l2_event_subscription sub;
+		memset(&sub, 0, sizeof(sub));
+		sub.type = MSM_CAMERA_V4L2_EVENT_TYPE;
+		sub.id = id;
+		if (ioctl(fd, VIDIOC_SUBSCRIBE_EVENT, &sub) < 0)
+			printf("[server] SUBSCRIBE id=%u: %s\n", id, strerror(errno));
+	}
+	printf("[server] subscribed to event ids 1..7 -- we are the imaging server\n");
+	fflush(stdout);
+	server_ready = 1;
+
+	for (;;) {
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		unsigned cmd;
+
+		if (poll(&pfd, 1, 500) <= 0)
+			continue;
+		memset(buf, 0, sizeof(buf));
+		if (ioctl(fd, DQ_IOCTL, buf) < 0) {
+			if (errno != EAGAIN && errno != EINTR)
+				printf("[server] DQEVENT: %s\n", strerror(errno));
+			continue;
+		}
+		cmd = rd32(buf + OFF_CMD);
+		session_id = rd32(buf + OFF_SESSION);
+		printf("[server] event id=%u cmd=0x%08x session=%u stream=%u\n",
+		       rd32(buf + OFF_ID), cmd, rd32(buf + OFF_SESSION),
+		       rd32(buf + OFF_STREAM));
+		fflush(stdout);
+
+		switch (cmd) {
+		case PRIV_S_FMT:
+			mipi_config();
+			sensor_program_mode();
+			sensor_dump_regs("after programming");
+			break;
+		case PRIV_STREAM_ON:
+			if (cpp_fw_path && strcmp(cpp_fw_path, "-") != 0)
+				cpp_load_firmware(cpp_fw_path);
+			/*
+			 * The ISP comes first, the sensor second.
+			 *
+			 * The order matters.  The IMX179 in the photo mode sends one
+			 * frame and then stops, so a stream-on that comes before the
+			 * pipeline is ready spends the only frame the sensor has.
+			 * The vendor's camera sends its ISP configuration first and
+			 * starts the sensor afterwards.
+			 */
+			isp_start();
+			if (cpp_fd >= 0) {
+				pthread_t cpp_ev;
+				pthread_create(&cpp_ev, NULL, cpp_event_thread,
+					       NULL);
+			}
+			if (cam->kernel_programs_sensor) {
+				static struct msm_camera_i2c_reg_array dummy[1];
+				struct msm_camera_i2c_reg_setting set;
+				memset(&set, 0, sizeof(set));
+				set.reg_setting = front_cmd_count ? dummy : NULL;
+				set.size = front_cmd_count;
+				set.addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+				set.data_type = MSM_CAMERA_I2C_BYTE_DATA;
+				sensor_cfg(CFG_SET_START_STREAM, &set, sizeof(set));
+			}
+			else
+				sensor_write_regs(stream_on_regs, 1);
+			sensor_dump_regs("after stream-on");
+			break;
+		case PRIV_STREAM_OFF:
+			if (cam->kernel_programs_sensor)
+				sensor_cfg(CFG_SET_STOP_STREAM, NULL, 0);
+			else
+				sensor_write_regs(stream_off_regs, 1);
+			break;
+		default:
+			break;
+		}
+
+		wr32(buf + OFF_STATUS, MSM_CAMERA_CMD_SUCESS);
+		wr32(buf + OFF_RET, 0);
+		if (ioctl(fd, ACK_IOCTL, buf) < 0)
+			printf("[server]   ACK failed: %s\n", strerror(errno));
+		fflush(stdout);
+	}
+	return NULL;
+}
+
+/* ------------------------------------------------------------------ *
+ * the capture client
+ * ------------------------------------------------------------------ */
+static int ion_alloc_fd(size_t len, unsigned int heap_mask)
+{
+	struct ion_allocation_data ad;
+	struct ion_fd_data fd;
+	int ion, r;
+
+	ion = open("/dev/ion", O_RDWR);
+	if (ion < 0) {
+		printf("[ion] open /dev/ion: %s\n", strerror(errno));
+		return -1;
+	}
+	memset(&ad, 0, sizeof(ad));
+	ad.len = len;
+	ad.align = 4096;
+	ad.heap_id_mask = heap_mask;
+	ad.flags = 0;
+	if (ioctl(ion, ION_IOC_ALLOC, &ad) < 0) {
+		printf("[ion] ION_IOC_ALLOC (mask 0x%x): %s\n", heap_mask,
+		       strerror(errno));
+		close(ion);
+		return -1;
+	}
+	memset(&fd, 0, sizeof(fd));
+	fd.handle = ad.handle;
+	fd.fd = -1;
+	if (ioctl(ion, ION_IOC_SHARE, &fd) < 0) {
+		printf("[ion] ION_IOC_SHARE: %s\n", strerror(errno));
+		close(ion);
+		return -1;
+	}
+	printf("[ion] allocated %zu bytes, dma-buf fd %d\n", len, fd.fd);
+	r = fd.fd;
+	close(ion);
+	return r;
+}
+
+static int profile_mode;
+static int debug_frames;
+static int bench_mode;
+static int target_fps;
+
+static uint64_t now_ns(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+/* Sum three bytes with one 32-bit load.  The ION buffer is mapped
+ * uncached, so wide loads matter: scalar byte reads measured 10.5 MB/s,
+ * 32-bit reads 44.6 MB/s, 64-bit reads 83 MB/s. */
+static inline unsigned sum3_u8(const unsigned char *p)
+{
+	uint32_t v;
+	memcpy(&v, p, 4);
+	return (unsigned)(v & 0xff) + ((v >> 8) & 0xff) + ((v >> 16) & 0xff);
+}
+
+/* Sum three interleaved U/V pixels (six bytes) with one 64-bit load. */
+static inline void sum3_uv(const unsigned char *p, unsigned *u, unsigned *v)
+{
+	uint64_t w;
+	memcpy(&w, p, 8);
+	*u = (unsigned)(w & 0xff) + ((w >> 16) & 0xff) + ((w >> 32) & 0xff);
+	*v = (unsigned)((w >> 8) & 0xff) + ((w >> 24) & 0xff) +
+	     ((w >> 40) & 0xff);
+}
+
+/*
+ * Divide a summed box by how many pixels it covered.  The box width is
+ * not always two: binned mode scales by 1.71 (boxes of 1 or 2) but the
+ * whole-frame path scales by 2.56 (boxes of 2 or 3), and an undivided
+ * three-pixel box is three times too bright -- a light grid over the
+ * picture.  This CPU has no divide instruction, so the small widths
+ * use shifts and a multiply.
+ */
+static inline unsigned long box_div(unsigned long a, int n)
+{
+	switch (n) {
+	case 1:
+		return a;
+	case 2:
+		return (a + 1) >> 1;
+	case 3:
+		return (a * 0xAAABUL) >> 17;
+	case 4:
+		return (a + 2) >> 2;
+	default:
+		return n > 0 ? a / (unsigned long)n : a;
+	}
+}
+
+static void *client_thread(void *arg)
+{
+	int *wh = (int *)arg;
+	int width = wh[0], height = wh[1];
+	unsigned char *bufs[8];
+	struct v4l2_format fmt;
+	struct v4l2_requestbuffers rb;
+	struct v4l2_plane planes[3];
+	int fd, i, n;
+
+	while (!server_ready) {
+		struct timespec ts = { 0, 20 * 1000 * 1000 };
+		nanosleep(&ts, NULL);
+	}
+	fd = open(cam->sensor_node, O_RDWR);
+	if (fd < 0) {
+		printf("[client] open %s: %s\n", cam->sensor_node, strerror(errno));
+		return NULL;
+	}
+	printf("[client] open %s SUCCEEDED -- the handshake completed\n",
+	       cam->sensor_node);
+	fflush(stdout);
+
+	{
+		struct v4l2_streamparm parm;
+		memset(&parm, 0, sizeof(parm));
+		parm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+		if (ioctl(fd, VIDIOC_S_PARM, &parm) == 0)
+			printf("[client] S_PARM ok: extendedmode=%u\n",
+			       parm.parm.capture.extendedmode);
+		else
+			printf("[client] S_PARM: %s\n", strerror(errno));
+		fflush(stdout);
+	}
+
+	memset(&fmt, 0, sizeof(fmt));
+	fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	{
+		struct msm_v4l2_format_data fdata;
+		memset(&fdata, 0, sizeof(fdata));
+		fdata.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+		fdata.width = width;
+		fdata.height = height;
+		fdata.pixelformat = V4L2_PIX_FMT_NV12;
+		fdata.num_planes = 2;
+		fdata.plane_sizes[0] = width * height;
+		fdata.plane_sizes[1] = (width * height) / 2;
+		memcpy(fmt.fmt.raw_data, &fdata, sizeof(fdata));
+	}
+	if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0)
+		printf("[client] S_FMT ok: %ux%u\n", width, height);
+	else
+		printf("[client] S_FMT: %s\n", strerror(errno));
+	fflush(stdout);
+
+	memset(&rb, 0, sizeof(rb));
+	/* More output buffers absorb userspace jitter: the CPP needs a
+	 * free vb2 buffer for every frame it processes, and the daemon
+	 * re-queues each one only after cropping it. */
+	rb.count = 8;
+	rb.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	rb.memory = V4L2_MEMORY_USERPTR;
+	if (ioctl(fd, VIDIOC_REQBUFS, &rb) < 0) {
+		printf("[client] REQBUFS: %s\n", strerror(errno));
+		return NULL;
+	}
+	printf("[client] REQBUFS ok: %u buffers\n", rb.count);
+	fflush(stdout);
+
+	for (i = 0; i < (int)rb.count; i++) {
+		unsigned int m = ion_mask_override ? ion_mask_override
+						    : cam->ion_mask;
+		/* The buffer has to hold what the CAMIF produces: its
+		 * window is 3280x2464 (the sensor's active size plus
+		 * the border), and the ISP-IF does not crop it (the
+		 * vendor's routing has the crop disabled).  A buffer
+		 * for the sensor's active size only is 91,648 bytes
+		 * too small, and the frame that comes out is empty. */
+		int buf_w = cam->width;
+		int buf_h = cam->height;
+		int fd_y = ion_alloc_fd((size_t)buf_w * buf_h, m);
+		int fd_c = ion_alloc_fd(
+			full_chroma ? (size_t)buf_w * buf_h
+				    : (size_t)buf_w * buf_h / 2, m);
+		if (fd_y < 0 || fd_c < 0) {
+			printf("[client] dma-buf allocation failed\n");
+			return NULL;
+		}
+		bufs[i] = (unsigned char *)(long)fd_y;
+		cbufs.planes[i][1].m.userptr = (unsigned long)fd_c;
+	}
+
+	for (i = 0; i < (int)rb.count; i++) {
+		struct v4l2_buffer buf;
+		memset(&buf, 0, sizeof(buf));
+		buf.index = i;
+		buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+		buf.memory = V4L2_MEMORY_USERPTR;
+		memset(planes, 0, sizeof(planes));
+		planes[0].m.userptr = (unsigned long)bufs[i];
+		planes[0].length = width * height;
+		planes[1].m.userptr = cbufs.planes[i][1].m.userptr;
+		planes[1].length = full_chroma ? width * height
+					       : (width * height) / 2;
+		buf.m.planes = planes;
+		buf.length = 2;
+		if (ioctl(fd, VIDIOC_QBUF, &buf) < 0) {
+			printf("[client] QBUF %d: %s\n", i, strerror(errno));
+			return NULL;
+		}
+	}
+	printf("[client] %d buffers queued\n", rb.count);
+	{
+		int qi;
+		camd_q_count = (int)rb.count;
+		if (camd_q_count > (int)(sizeof(camd_q) / sizeof(camd_q[0])))
+			camd_q_count = (int)(sizeof(camd_q) / sizeof(camd_q[0]));
+		for (qi = 0; qi < camd_q_count; qi++)
+			camd_q[qi] = qi;
+		camd_q_head = 0;
+		camd_q_tail = 0;
+	}
+	fflush(stdout);
+
+	cbufs.count = rb.count;
+	cbufs.width = width;
+	for (i = 0; i < (int)rb.count && i < 8; i++)
+		client_buf_fd[i] = (int)bufs[i];
+	cbufs.height = height;
+	for (i = 0; i < (int)rb.count && i < 8; i++) {
+		cbufs.planes[i][0].m.userptr = (unsigned long)bufs[i];
+		cbufs.planes[i][0].length = width * height;
+		cbufs.planes[i][1].length = full_chroma ? width * height
+							: (width * height) / 2;
+		memset(&cbufs.buf[i], 0, sizeof(cbufs.buf[i]));
+		cbufs.buf[i].index = i;
+		cbufs.buf[i].type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+		cbufs.buf[i].memory = V4L2_MEMORY_USERPTR;
+		cbufs.buf[i].m.planes = cbufs.planes[i];
+		cbufs.buf[i].length = 2;
+	}
+
+	if (ioctl(fd, VIDIOC_STREAMON, &rb.type) < 0) {
+		printf("[client] STREAMON: %s\n", strerror(errno));
+		return NULL;
+	}
+	printf("[client] STREAMON ok -- waiting for a frame\n");
+	fflush(stdout);
+	{
+		/* The camera kernel dumps the first 64 CPP frames to
+		 * /data/local/tmp for protocol analysis.  The sysfs
+		 * parameter is only writable once the CPP stream is up;
+		 * turn it off here so normal scanning never pays for the
+		 * dump (it drops ISP frames and keeps the CPU busy). */
+		FILE *f = fopen(
+			"/sys/module/msm_cpp/parameters/cpp_dump_frames", "w");
+		if (f != NULL) {
+			fputs("0", f);
+			fclose(f);
+		}
+	}
+
+	static unsigned last_requests;
+	static int idle;
+	static int no_frame;
+	static int qfail;
+	/*
+	 * The stream has stalled when the same buffer keeps coming back
+	 * without the ISP writing it: the loop then spins at 100% CPU
+	 * (and hammers the CPP), which starves the ISP and turns the
+	 * stall into a hang.  Track the last index and back off.
+	 */
+	static int last_idx = -1;
+	static int same_idx;
+	static int stalled;
+	for (n = 0; ; n++) {
+		struct v4l2_buffer buf;
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		int r;
+		int cfg_ok = 0;
+		uint64_t p0 = now_ns(), p1 = 0, p2 = 0, p3 = 0;
+		uint64_t p4 = 0, p5 = 0, p5a = 0, p6 = 0, p7 = 0;
+		static uint64_t a_upd, a_cpp, a_rep, a_wait, a_dq;
+		static uint64_t a_dbg, a_down, a_q, a_pace, a_tot;
+		static int pn;
+
+		{
+			unsigned req = frame_requests;
+			if (req == last_requests) {
+				if (idle < 1000)
+					idle++;
+			} else {
+				last_requests = req;
+				idle = 0;
+			}
+		}
+		/*
+		 * No request for a while: stretch the frame to the slowest
+		 * the sensor can produce.  Nothing else changes -- the
+		 * buffers keep rotating and the per-frame work runs at the
+		 * lower rate -- so the pipeline stays in phase.  The next
+		 * request restores the VTS in the socket thread.
+		 */
+		if (!vts_slowed && idle_vts != 0 && idle_after > 0) {
+			time_t now = time(NULL);
+			if (now - last_request_at >= idle_after) {
+				if (sensor_set_vts(idle_vts) == 0) {
+					vts_slowed = 1;
+					printf("[stream] idle: VTS 0x%04x\n",
+					       idle_vts);
+					fflush(stdout);
+				}
+			}
+		}
+		/*
+		 * Do not stop the pipeline when idle.  Skipping the
+		 * DQBUF/requeue here fills the vb2 queue and the CPP
+		 * stalls; the next client then gets no frames at all.
+		 * The idle leak (the CPP completed-frame queue) is
+		 * fixed in the kernel, not by starving the pipeline.
+		 */
+
+		/* The vendor's per-frame order: the chromatrix goes to
+		 * the CPP first (it carries the frame's buffer
+		 * addresses, which change), then the ISP's register
+		 * cycle, then the frame is waited for.
+		 *
+		 * The camera2 HAL brackets its cycle with UPDATE_STREAM
+		 * ("I want a frame now") and CONFIG_DONE, and hands the
+		 * ISP the buffer for the frame with ENQUEUE_BUF. */
+		{
+			struct msm_vfe_axi_stream_update_cmd upd;
+			int done = 0;
+
+			memset(&upd, 0, sizeof(upd));
+			upd.stream_handle = isp_stream_handle;
+			upd.update_type = UPDATE_STREAM_REQUEST_FRAMES;
+			upd.skip_pattern = NO_SKIP;
+			upd.request_frm_num = 1;
+			if (ioctl(isp_fd, VIDIOC_MSM_ISP_UPDATE_STREAM,
+				  &upd) < 0)
+				printf("[isp] UPDATE_STREAM: %s\n",
+				       strerror(errno));
+			if (ioctl(isp_fd, VIDIOC_MSM_ISP_CONFIG_DONE,
+				  &done) < 0)
+				printf("[isp] CONFIG_DONE: %s\n",
+				       strerror(errno));
+		}
+		p1 = now_ns();
+
+		if (cpp_fw_path && strcmp(cpp_fw_path, "-") != 0)
+			{
+			/*
+			 * A short retry, not the old 5 x 50 ms (250 ms):
+			 * that blocked the capture thread long enough to
+			 * starve the ISP buffers, overflow its tasklet queue
+			 * and bite the hardware watchdog (wdog_bark).  But
+			 * zero retry is also wrong: the CPP's output buffer
+			 * for the previous frame is not done yet, and with
+			 * no retry the CPP is never configured again -- a
+			 * deadlock that leaves the stream with no frames.
+			 * 3 x 2 ms is enough for the previous frame to
+			 * complete and short enough not to starve anything.
+			 */
+			int retry;
+			for (retry = 0; retry < 3; retry++) {
+				if (cpp_send_chromatrix() == 0) {
+					cfg_ok = 1;
+					break;
+				}
+				struct timespec ts = { 0, 2 * 1000 * 1000 };
+				nanosleep(&ts, NULL);
+			}
+		}
+		p2 = now_ns();
+
+		if (replay_cycle) {
+			isp_replay(cam_cycle, CAM_CYCLE_COUNT,
+				   "per-frame cycle");
+			if (isp_stream_src == PIX_VIEWFINDER) {
+				int done = 0;
+				ioctl(isp_fd, VIDIOC_MSM_ISP_CONFIG_DONE,
+				      &done);
+			}
+		}
+		p3 = now_ns();
+		r = poll(&pfd, 1, 2000);
+		if (r <= 0) {
+			/*
+			 * Do NOT exit and let the supervisor restart the
+			 * daemon.  On this kernel the camera teardown is
+			 * broken:
+			 *
+			 *   msm_isp_close_node: Invalid close
+			 *   msm_csid_release: csid invalid state 1
+			 *   msm_vb2_buf_cleanup: NULL stream
+			 *
+			 * and the next daemon's re-init then overflows the
+			 * ISP-IF PIX0 and the ISP tasklet queue, which the
+			 * hardware watchdog turns into a reboot
+			 * (bootreason=wdog_bark).  Staying up leaves the
+			 * camera stalled -- reboot to recover -- but it does
+			 * not crash the box.
+			 */
+			printf("[client] no frame after 2s (%d) idle=%d cfg=%d qfail=%d\n",
+			       ++no_frame, idle, cfg_ok, qfail);
+			continue;
+		}
+		/*
+		 * A poll error (not POLLIN) means the stream is in an
+		 * error state; DQBUF then fails immediately and the loop
+		 * would busy-spin at 100% CPU, which starves the ISP and
+		 * turns the stall into a hang.  Sleep instead.
+		 */
+		if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+			static int perr;
+			if (perr++ < 5)
+				printf("[client] poll error revents=0x%x\n",
+				       pfd.revents);
+			struct timespec ts = { 0, 100 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
+			continue;
+		}
+		no_frame = 0;
+		p4 = now_ns();
+		{
+			struct v4l2_plane dqplanes[2];
+			memset(dqplanes, 0, sizeof(dqplanes));
+			memset(&buf, 0, sizeof(buf));
+			buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+			buf.memory = V4L2_MEMORY_USERPTR;
+			buf.m.planes = dqplanes;
+			buf.length = 2;
+			if (ioctl(fd, VIDIOC_DQBUF, &buf) < 0) {
+				static int dqerr;
+				if (dqerr++ < 5)
+					printf("[client] DQBUF: %s\n",
+					       strerror(errno));
+				/* Do not busy-spin: a failing DQBUF
+				 * saturates the CPU and starves the ISP. */
+				struct timespec ts = { 0, 100 * 1000 * 1000 };
+				nanosleep(&ts, NULL);
+				continue;
+			}
+			p5 = now_ns();
+			if (buf.index == last_idx) {
+				if (++same_idx >= 3)
+					stalled = 1;
+			} else {
+				last_idx = buf.index;
+				same_idx = 0;
+				stalled = 0;
+			}
+			cpp_input_index = (buf.index + 1) % (int)cbufs.count;
+			if (debug_frames) {
+				printf("[client] plane0: bytesused=%u length=%u data_offset=%u\n",
+				       dqplanes[0].bytesused, dqplanes[0].length,
+				       dqplanes[0].data_offset);
+				printf("[client] plane1: bytesused=%u length=%u data_offset=%u\n",
+				       dqplanes[1].bytesused, dqplanes[1].length,
+				       dqplanes[1].data_offset);
+			}
+		}
+		if (debug_frames) {
+			/* how often the frames come: with the CAMIF's
+			 * pixel clock and the sensor's real rate, the
+			 * frame rate shows whether the two agree */
+			static struct timespec last;
+			struct timespec now;
+			double dt;
+
+			clock_gettime(CLOCK_MONOTONIC, &now);
+			dt = (now.tv_sec - last.tv_sec) +
+			     (now.tv_nsec - last.tv_nsec) / 1e9;
+			last = now;
+			if (dt > 0)
+				printf("[client] the frame rate: %.2f fps"
+				       " (%.2f Mpixel/s)\n", 1.0 / dt,
+				       3280.0 * 2464.0 / dt / 1e6);
+		}
+		{
+			/*
+			 * One line per frame is a lot of log: the daemon
+			 * can take a hundred frames a second, and the
+			 * log lives on the data partition.  Every hundredth
+			 * frame is enough to see the rate and the buffer
+			 * index; the frame number is in the line.
+			 */
+			static int frame_n;
+
+			if (debug_frames || (++frame_n % 100) == 0)
+				printf("[client] GOT A FRAME: index=%u bytesused=%u seq=%u (frame %d)\n",
+				       buf.index, buf.bytesused, buf.sequence,
+				       frame_n);
+		}
+		if (debug_frames) {
+		{
+			/* Which of our buffers did the ISP actually write
+			 * into?  Count the non-zero bytes of each
+			 * one: the frame may have landed in a buffer
+			 * other than the one that was dequeued.
+			 *
+			 * The wait matters: the buffer is delivered
+			 * when the frame is done, but the pixels
+			 * keep landing for a moment afterwards. */
+			int bi;
+			struct timespec settle = { 0, 300 * 1000 * 1000 };
+
+			nanosleep(&settle, NULL);
+
+			for (bi = 0; bi < (int)cbufs.count && bi < 8; bi++) {
+				const unsigned char *p;
+				size_t off, nbytes = 0;
+				size_t len = (size_t)width * height;
+
+				p = mmap(NULL, len, PROT_READ, MAP_SHARED,
+					 (int)bufs[bi], 0);
+				if (p == MAP_FAILED) {
+					printf("[client] buffer %d: mmap failed\n",
+					       bi);
+					continue;
+				}
+				for (off = 0; off < len; off += 4096) {
+					size_t k;
+					for (k = 0; k < 4096 && off + k < len;
+					     k++)
+						if (p[off + k])
+							nbytes++;
+				}
+				printf("[client] buffer %d: %u non-zero bytes%s\n",
+				       bi, (unsigned)nbytes,
+				       bi == (int)buf.index ? " (dequeued)" : "");
+				if (nbytes > 0) {
+					char name[64];
+					FILE *g;
+
+					snprintf(name, sizeof(name),
+						 "/data/local/tmp/frame%d.nv12", bi);
+					g = fopen(name, "wb");
+					if (g) {
+						fwrite(p, 1, len, g);
+						fclose(g);
+					}
+				}
+				munmap((void *)p, len);
+			}
+		}
+		{
+			const char *out = "/data/local/tmp/frame.nv12";
+			FILE *f;
+			void *p = mmap(NULL, (size_t)cbufs.width * cbufs.height,
+				       PROT_READ, MAP_SHARED,
+				       (int)bufs[buf.index], 0);
+			f = fopen(out, "wb");
+			if (f) {
+				if (p != MAP_FAILED)
+					fwrite(p, 1,
+					       (size_t)cbufs.width * cbufs.height,
+					       f);
+				fclose(f);
+				printf("[client] wrote %s (%s)\n", out,
+				       p == MAP_FAILED ? "mmap failed" : "ok");
+			}
+			if (p != MAP_FAILED)
+				munmap(p, (size_t)cbufs.width * cbufs.height);
+		}
+		}
+		p5a = now_ns();
+		/* convert to QVGA and store in latest slot */
+		{
+			const unsigned char *src_y, *src_uv;
+			void *p_y, *p_uv;
+			size_t y_sz = (size_t)width * height;
+			size_t uv_sz = (size_t)width * height / 2;
+
+			if (debug_frames) {
+				struct timespec ts = { 0, 100 * 1000 * 1000 };
+				nanosleep(&ts, NULL);
+			}
+			p_y = mmap(NULL, y_sz, PROT_READ, MAP_SHARED,
+				   (int)bufs[buf.index], 0);
+			p_uv = mmap(NULL, uv_sz, PROT_READ, MAP_SHARED,
+				    (int)cbufs.planes[buf.index][1].m.userptr, 0);
+			if (p_y == MAP_FAILED || p_uv == MAP_FAILED) {
+				static int mfail;
+				if (mfail++ < 5)
+					printf("[client] mmap fail y=%p uv=%p errno=%d\n",
+					       p_y, p_uv, errno);
+			}
+			int published = 0;
+			if (!idle) {
+			if (p_y != MAP_FAILED && p_uv != MAP_FAILED) {
+				src_y = (const unsigned char *)p_y;
+				{
+					/* The ION frame is uncached: a
+					 * byte-by-byte read of it runs at
+					 * ~20 MB/s, a wide memcpy at
+					 * ~250 MB/s.  Copy only the sensor
+					 * window (the full frame in binned
+					 * mode, the 2160 square in full
+					 * mode), row by row, into the
+					 * cached buffer.  The control
+					 * thread crops the last published
+					 * copy for a QR retry; the capture
+					 * thread only writes the other. */
+					int bi = (bounce_pub == 0) ? 1 : 0;
+					int r;
+					if (!bounce_buf[bi])
+						bounce_buf[bi] = malloc(
+							(size_t)crop_w * crop_h);
+					if (bounce_buf[bi]) {
+						for (r = 0; r < crop_h; r++)
+							memcpy(bounce_buf[bi] +
+							       (size_t)r * crop_w,
+							       src_y +
+							       (size_t)(crop_y + r) *
+							       read_stride +
+							       crop_x,
+							       crop_w);
+						pthread_mutex_lock(&bounce_mutex);
+						bounce_pub = bi;
+						pthread_mutex_unlock(&bounce_mutex);
+						src_y = bounce_buf[bi];
+					}
+				}
+				if (rawcrop) {
+					/*
+					 * Diagnostic: publish a linear 1:1
+					 * crop of the raw source, centred,
+					 * with no demosaic, downscale or
+					 * rotation.  If the artifact is here
+					 * it is in the raw frame; if only in
+					 * the processed preview or the
+					 * framebuffer, it is downstream.
+					 */
+					int ox = (crop_w - out_w) / 2;
+					int oy = (crop_h - out_h) / 2;
+					int w, h, y;
+					if (ox < 0) ox = 0;
+					if (oy < 0) oy = 0;
+					w = crop_w - ox;
+					if (w > out_w) w = out_w;
+					h = crop_h - oy;
+					if (h > out_h) h = out_h;
+					pthread_mutex_lock(&frame_mutex);
+					if (!latest_y) {
+						latest_y = malloc(out_w * out_h);
+						latest_uv = malloc(
+							(out_w / 2) *
+							(out_h / 2) * 2);
+					}
+					if (latest_y) {
+						memset(latest_y, 0,
+						       (size_t)out_w * out_h);
+						for (y = 0; y < h; y++)
+							memcpy(latest_y +
+							       (size_t)y * out_w,
+							       src_y +
+							       (size_t)(oy + y) *
+							       crop_w + ox, w);
+						latest_seq++;
+						latest_ready = 1;
+						shm_publish();
+						published = 1;
+						#ifndef KRUX_RELEASE
+if (dump_now) {
+							dump_now = 0;
+							dump_frames(src_y);
+						}
+#endif
+
+					}
+					pthread_mutex_unlock(&frame_mutex);
+					goto proc_done;
+				}
+				{
+					static int dumped;
+#ifdef KRUX_RELEASE
+					const char *dump = NULL;
+#else
+					const char *dump = getenv("CAMD_DUMP_RAW");
+#endif
+					if (dump && !dumped) {
+						size_t k, n = (size_t)crop_w * crop_h;
+						unsigned long sum = 0;
+						for (k = 0; k < n; k += 97)
+							sum += src_y[k];
+						if (sum / (n / 97 + 1) > 18) {
+							FILE *df = fopen(dump, "wb");
+							if (df) {
+								fwrite(src_y, 1, n, df);
+								fclose(df);
+								printf("[client] dumped raw %s\n", dump);
+								dumped = 1;
+							}
+						}
+					}
+				}
+				src_uv = (const unsigned char *)p_uv;
+				if (bench_mode) {
+					static int bench_done;
+					if (!bench_done) {
+						uint64_t t0, t1;
+						volatile uint64_t s = 0;
+						size_t i;
+						void *tmp;
+
+						bench_done = 1;
+						t0 = now_ns();
+						for (i = 0; i < y_sz; i++)
+							s += src_y[i];
+						t1 = now_ns();
+						printf("[bench] y8 %.1f ms %.1f MB/s sum=%llu\n",
+						       (t1 - t0) / 1e6,
+						       (double)y_sz / (t1 - t0) * 1e3,
+						       (unsigned long long)s);
+
+						s = 0;
+						t0 = now_ns();
+						for (i = 0; i + 4 <= y_sz; i += 4)
+							s += *(const uint32_t *)(src_y + i);
+						t1 = now_ns();
+						printf("[bench] y32 %.1f ms %.1f MB/s sum=%llu\n",
+						       (t1 - t0) / 1e6,
+						       (double)y_sz / (t1 - t0) * 1e3,
+						       (unsigned long long)s);
+
+						s = 0;
+						t0 = now_ns();
+						for (i = 0; i + 8 <= y_sz; i += 8) {
+							uint64_t v;
+							memcpy(&v, src_y + i, 8);
+							s += v;
+						}
+						t1 = now_ns();
+						printf("[bench] y64 %.1f ms %.1f MB/s sum=%llu\n",
+						       (t1 - t0) / 1e6,
+						       (double)y_sz / (t1 - t0) * 1e3,
+						       (unsigned long long)s);
+
+						tmp = malloc(y_sz);
+						if (tmp) {
+							t0 = now_ns();
+							memcpy(tmp, src_y, y_sz);
+							t1 = now_ns();
+							s += ((unsigned char *)tmp)[0];
+							printf("[bench] memcpy %.1f ms %.1f MB/s sum=%llu\n",
+							       (t1 - t0) / 1e6,
+							       (double)y_sz / (t1 - t0) * 1e3,
+							       (unsigned long long)s);
+							free(tmp);
+						}
+					}
+				}
+				/* Hold the frame lock while latest_y is rewritten:
+				 * the socket thread copies it, and a half-written
+				 * frame showed up as tiled/torn tiles. */
+				pthread_mutex_lock(&frame_mutex);
+				if (!latest_y) {
+					latest_y = malloc(out_w * out_h);
+					latest_uv = malloc((out_w / 2) * (out_h / 2) * 2);
+					if (latest_uv)
+						memset(latest_uv, 0,
+						       (size_t)(out_w / 2) *
+						       (out_h / 2) * 2);
+				}
+				{
+					/* Box-average the sensor window and rotate
+					 * it 90 degrees counter-clockwise into the
+					 * portrait preview.  In full mode the window
+					 * is 2160x2160 and the output 1080x1080, so
+					 * every output pixel is exactly the average
+					 * of 2x2 source pixels: an integer scale
+					 * with no fractional sampling.  Binned mode
+					 * keeps the generic box average. */
+					uint64_t td0 = now_ns();
+					uint64_t t_dem = 0, t_ds = 0;
+					{
+						static unsigned short *mid;
+						static unsigned char *smooth;
+						static int *sx0_tab, *sx1_tab;
+						const unsigned char *dsrc = src_y;
+						int mx, my, sy, sx;
+						int two = (crop_h == 2 * out_w &&
+							   crop_w == 2 * out_h);
+						if (!mid)
+							mid = malloc((size_t)out_h *
+								     out_w * 2);
+						if (mid) {
+							if (!two) {
+								memset(mid, 0,
+								       (size_t)out_h * out_w * 2);
+							}
+							if (!two &&
+							    isp_stream_src !=
+							    PIX_VIEWFINDER) {
+								/*
+								 * The daemon reads the ISP's raw
+								 * frame, and its luma is the Bayer
+								 * mosaic (R/G/G/B in each 2x2
+								 * block).  The generic box sampler
+								 * below scales by 1.71x, which does
+								 * not line up with the 2x2 Bayer
+								 * phase: the colour pattern aliases
+								 * into wide bands that move with
+								 * the scene -- the preview's bands.
+								 * The full-res path is immune only
+								 * because it divides by exactly 2.
+								 *
+								 * Demosaic to luma first: the green
+								 * samples are the luma, and at the
+								 * red/blue sites the green is the
+								 * average of the four orthogonal
+								 * green neighbours.  That removes
+								 * the checkerboard without the blur
+								 * a 2x2 average would cost -- the
+								 * finder pass sees more, not fewer,
+								 * corners.  The raw bounce stays
+								 * untouched: the QR retry crops it
+								 * 1:1.
+								 */
+								if (!smooth)
+									smooth = malloc(
+										(size_t)crop_w * crop_h);
+								if (smooth) {
+									int y, x;
+									uint64_t td = now_ns();
+									for (y = 0; y < crop_h; y++) {
+										const unsigned char *r =
+											src_y + (size_t)y * crop_w;
+										unsigned char *o =
+											smooth + (size_t)y * crop_w;
+										for (x = 0; x < crop_w; x++) {
+											if ((y ^ x) & 1) {
+												/* green */
+												o[x] = r[x];
+											} else {
+												unsigned int a = 0;
+												int n = 0;
+												if (x > 0) {
+													a += r[x - 1];
+													n++;
+												}
+												if (x + 1 < crop_w) {
+													a += r[x + 1];
+													n++;
+												}
+												if (y > 0) {
+													a += r[x - crop_w];
+													n++;
+												}
+												if (y + 1 < crop_h) {
+													a += r[x + crop_w];
+													n++;
+												}
+												o[x] = (unsigned char)
+													(a / (n ? n : 1));
+											}
+										}
+									}
+									dsrc = smooth;
+									t_dem = now_ns() - td;
+								}
+							}
+							if (two) {
+								for (my = 0; my < out_w; my++) {
+									const unsigned char *r0 =
+										src_y + (size_t)(2 * my) * crop_w;
+									const unsigned char *r1 =
+										r0 + crop_w;
+									unsigned short *orow =
+										mid + my * out_h;
+									for (mx = 0; mx < out_h; mx++) {
+										int sx2 = 2 * mx;
+										orow[mx] = (unsigned short)
+											((r0[sx2] + r0[sx2 + 1] +
+											  r1[sx2] + r1[sx2 + 1]) >> 2);
+									}
+								}
+							} else {
+								uint64_t td = now_ns();
+								/*
+								 * The horizontal box edges are the
+								 * same for every row, and this CPU
+								 * has no divide instruction: two
+								 * divisions per output pixel was
+								 * 90 ms of the 130 ms this pass
+								 * took, and the whole preview ran
+								 * at 7 fps because of it.  Work
+								 * them out once.
+								 */
+								if (!sx0_tab || !sx1_tab) {
+									if (!sx0_tab)
+										sx0_tab = malloc(
+											(size_t)out_h *
+											sizeof(int));
+									if (!sx1_tab)
+										sx1_tab = malloc(
+											(size_t)out_h *
+											sizeof(int));
+									if (sx0_tab && sx1_tab)
+										for (mx = 0; mx < out_h; mx++) {
+											sx0_tab[mx] =
+												mx * crop_w / out_h;
+											sx1_tab[mx] =
+												(mx + 1) * crop_w / out_h;
+										}
+								}
+								if (sx0_tab && sx1_tab) {
+									for (my = 0; my < out_w; my++) {
+										int sy0 = my * crop_h / out_w;
+										int sy1 = (my + 1) * crop_h / out_w;
+										unsigned short *orow =
+											mid + my * out_h;
+										for (sy = sy0; sy < sy1; sy++) {
+											const unsigned char *row =
+												dsrc + (size_t)sy * crop_w;
+											for (mx = 0; mx < out_h; mx++) {
+												int sx0 = sx0_tab[mx];
+												int sx1 = sx1_tab[mx];
+												unsigned int a = 0;
+												int n = sx1 - sx0;
+												for (sx = sx0; sx < sx1; sx++)
+													a += row[sx];
+												orow[mx] +=
+													(unsigned short)
+													box_div(a, n);
+											}
+										}
+									}
+								}
+								t_ds = now_ns() - td;
+							}
+							for (my = 0; my < out_w; my++) {
+								int sy0 = my * crop_h / out_w;
+								int sy1 = (my + 1) * crop_h / out_w;
+								int nr = two ? 1 : (sy1 - sy0);
+								unsigned short *orow =
+									mid + my * out_h;
+								for (mx = 0; mx < out_h; mx++) {
+									unsigned long v =
+										box_div(orow[mx], nr);
+									v *= luma_gain;
+									if (v > 255) v = 255;
+									/* 90 deg CCW:
+									 * out(dy,dx) = mid(dx, out_h-1-dy) */
+									latest_y[(out_h - 1 - mx) *
+										 out_w + my] =
+										(unsigned char)v;
+								}
+							}
+						}
+					}
+					{
+						static int dn;
+						if ((++dn % 50) == 0)
+							printf("[down] demosaic %.1f ms, "
+							       "downscale %.1f ms, "
+							       "total %.1f ms\n",
+							       t_dem / 1e6, t_ds / 1e6,
+							       (now_ns() - td0) / 1e6);
+					}
+					if (bench_mode)
+						printf("[bench] downscale %.1f ms\n",
+						       (now_ns() - td0) / 1e6);
+				}
+				if (unsharp_amount != 0) {
+					/* Unsharp mask: the box downscale is a low-pass
+					 * filter, and QR modules need their edges.
+					 * Skip the whole pass when it is off: it was
+					 * computing eight neighbours per pixel and
+					 * writing the same value back, which on the
+					 * 1080x1080 preview is a real per-frame cost. */
+					int x, yy;
+					for (yy = 1; yy < out_h - 1; yy++) {
+						for (x = 1; x < out_w - 1; x++) {
+							int i = yy * out_w + x;
+							int b = (latest_y[i - out_w - 1] +
+								 latest_y[i - out_w] +
+								 latest_y[i - out_w + 1] +
+								 latest_y[i - 1] +
+								 latest_y[i + 1] +
+								 latest_y[i + out_w - 1] +
+								 latest_y[i + out_w] +
+								 latest_y[i + out_w + 1]) / 8;
+							int l = latest_y[i];
+							int v;
+							if (unsharp_amount == 0)
+								v = l;
+							else if (unsharp_amount == 2)
+								v = (3 * l - b) / 2;
+							else
+								v = 2 * l - b;
+							latest_y[i] = v < 0 ? 0 :
+								      v > 255 ? 255 : v;
+						}
+					}
+				}
+				/* The chroma plane is not downscaled or used:
+				 * the display, the decoder and the entropy all
+				 * run on the luma, so the gate below keys off
+				 * the luma alone.  (The chroma could not be
+				 * used for colour anyway: its values are
+				 * centred on sixteen, not the neutral 128 a
+				 * YUV conversion assumes.) */
+				{
+					/* Two producers complete into the capture
+					 * queue (the ISP's raw pass and the CPP's
+					 * processed pass), so every other frame is
+					 * an unprocessed, very dark copy.  Publish
+					 * only frames close to the brightest seen
+					 * recently; otherwise the preview flashes
+					 * dark and the decoder never settles. */
+					static unsigned max_seen;
+					static int starve;
+					unsigned long s = 0;
+					unsigned long us = 0;
+					int k, ns = 0, un = 0;
+					int publish;
+					int valid = 1;
+					for (k = 0; k < out_w * out_h; k += 97) {
+						s += latest_y[k];
+						ns++;
+					}
+					s /= (ns ? ns : 1);
+					/* The CPP writes the chroma plane; the ISP's
+					 * raw pass leaves it empty.  Sample it -- a
+					 * few bytes straight from ION, not the old
+					 * full downscale -- to tell the processed
+					 * frames from the dark raw copies.  The
+					 * luma-only gate could not, so the starve
+					 * path published a dark frame every fourth:
+					 * the flickering dark overlay. */
+					for (k = 0; k < (int)uv_sz; k += 4096) {
+						us += src_uv[k];
+						un++;
+					}
+					us /= (un ? un : 1);
+					/*
+					 * The chroma plane is what tells a
+					 * processed frame from the ISP's raw
+					 * copy -- except in this pipeline: the
+					 * ISP streams CAMIF_RAW and the CPP
+					 * passes it through, so there is never
+					 * any chroma and the test rejected
+					 * every frame.  That is why the preview
+					 * froze solid at full resolution while
+					 * the delivered buffer itself kept
+					 * updating.  With the raw stream the
+					 * luma is the frame, whatever it
+					 * contains.
+					 */
+					if (isp_stream_src == CAMIF_RAW)
+						valid = 1;
+					else if (us < 8)
+						valid = 0;
+					/* The decision, once every two hundred
+					 * frames: the luma mean, the chroma mean,
+					 * the reference and whether the frame is
+					 * published. */
+					{
+						static int dcount;
+						if (++dcount % 200 == 0)
+							printf("[pub] s=%lu us=%lu valid=%d max=%u seq=%d\n",
+							       s, us, valid, max_seen,
+							       latest_seq);
+					}
+					/* Adapt quickly when the scene darkens, and never
+					 * suppress more than a few frames in a row: a
+					 * stuck threshold left the client with no new
+					 * frames (and auto-exposure with no input).
+					 *
+					 * The bar is deliberately low.  Its job is to
+					 * drop the ISP's raw copies, which are very
+					 * dark.  A tight bar also withheld frames
+					 * whenever the autofocus moved the lens and
+					 * the brightness changed, and the preview then
+					 * stalled until the reference decayed: the
+					 * image appeared to drift and then came back. */
+					max_seen -= max_seen / 32;
+					if (!valid) {
+						publish = 0;
+					} else {
+						publish = (s * 8 >= max_seen);
+						if (s > max_seen)
+							max_seen = s;
+					}
+					if (publish) {
+						starve = 0;
+					} else if (valid && ++starve >= 4) {
+						/* Never let a dark scene starve the
+						 * client: the QR page needs frames to
+						 * poll its buttons and run AF. */
+						publish = 1;
+						starve = 0;
+					}
+					latest_mean = (int)s;
+					if (publish) {
+						latest_seq++;
+						latest_ready = 1;
+						published = 1;
+						shm_publish();
+					}
+
+					#ifndef KRUX_RELEASE
+if (dump_now) {
+						dump_now = 0;
+						dump_frames(src_y);
+						{
+							unsigned char mx = 0;
+							int mi;
+							FILE *m;
+
+							for (mi = 0;
+							     mi < out_w * out_h;
+							     mi++)
+								if (latest_y[mi] > mx)
+									mx = latest_y[mi];
+							m = fopen(
+								"/data/krux/scan.meta.tmp",
+								"w");
+							if (m) {
+								fprintf(m,
+									"seq=%d mean=%lu max=%u w=%d h=%d pw=%d ph=%d cw=%d ch=%d focus=%d sharp=%lu\n",
+									latest_seq,
+									s, mx,
+									width, height,
+									out_w, out_h,
+									crop_w, crop_h,
+									act_curr,
+									af_sharpness(latest_y));
+								fclose(m);
+								rename(
+									"/data/krux/scan.meta.tmp",
+									"/data/krux/scan.meta");
+							}
+						}
+					}
+#endif
+
+				}
+				pthread_mutex_unlock(&frame_mutex);
+			}
+
+			/* Autofocus sweep, using the vendor HAL's move
+			 * convention.  Runs once after the stream is up; the
+			 * lens then stays put while scanning. */
+			/*
+			 * The gate is the *scene*, not the QR: the
+			 * finder sits in a dark room and the processed
+			 * PIX path is darker than the raw one, so a
+			 * mean of 20 kept AF from ever running here.
+			 * The score is divided by the mean, so a dim
+			 * frame compares fairly; 10 still rejects a
+			 * black frame.
+			 */
+			if (published && latest_mean >= 10) {
+				static int phase, step, best_step, settle;
+				static int final_settle;
+				static int coarse_best_step, fine_best_step;
+				static unsigned long coarse_best_score, fine_best_score;
+				static unsigned long best_score;
+				static int fine_lo, fine_hi;
+				static int local_search;
+				static int coarse_best_mean, fine_best_mean;
+				static int best_mean;
+
+				if (af_abort) {
+					/* The exposure changed under a running
+					 * sweep: its scores are not comparable
+					 * with each other any more.  A refocus
+					 * that is already waiting is not
+					 * cancelled: it will be measured
+					 * under the new exposure, which is
+					 * exactly what is wanted. */
+					af_abort = 0;
+					phase = 5;
+					local_search = 0;
+					af_sweeping = 0;
+					printf("[af] sweep abandoned\n");
+				}
+				if (refocus_request) {
+					refocus_request = 0;
+					settle = 0;
+					/* Let POWER refocus even when a fixed step was
+					 * configured; the sweep overrides it. */
+					focus_step = -1;
+					if (!refocus_full && last_focus_step >= 0 &&
+					    af_best_contrast > 0) {
+						/* Is the lens still where it was?
+						 * Compare the sharpness of the frame
+						 * now with the sharpness this
+						 * position gave when it was last
+						 * swept, both divided by the
+						 * brightness, so that the
+						 * comparison does not depend on
+						 * the exposure.  If it still
+						 * matches, the picture is in focus
+						 * and a sweep would only cost the
+						 * user seconds. */
+						unsigned long cur =
+							af_sharpness(latest_y);
+						unsigned long cm =
+							(unsigned long)
+							(latest_mean > 0 ?
+							 latest_mean : 1);
+						unsigned long contrast =
+							cur * 1000 / cm;
+						if (contrast * 100 >=
+						    af_best_contrast * 85) {
+							printf("[af] already sharp "
+							       "(%lu of %lu), keeping "
+							       "step %d\n",
+							       contrast,
+							       af_best_contrast,
+							       act_curr);
+							phase = 5;
+							local_search = 0;
+							goto af_done;
+						}
+					}
+					if (!refocus_full && last_focus_step >= 0) {
+						/* Refine the last good step with a
+						 * short local sweep.  This is fast
+						 * enough to repeat while aiming. */
+						phase = 2;
+						af_sweeping = 1;
+						fine_lo = last_focus_step - 5;
+						if (fine_lo < 0)
+							fine_lo = 0;
+						fine_hi = last_focus_step + 5;
+						if (fine_hi >= ACT_TOTAL_STEPS)
+							fine_hi = ACT_TOTAL_STEPS - 1;
+						fine_best_step = fine_lo;
+						fine_best_score = 0;
+						coarse_best_step = last_focus_step;
+						coarse_best_score = 0;
+						local_search = 1;
+						step = fine_lo;
+						actuator_move(step);
+						printf("[af] local fine %d..%d (last %d)\n",
+							fine_lo, fine_hi, last_focus_step);
+					} else {
+						phase = 0;
+						local_search = 0;
+						af_sweeping = 1;
+						printf("[af] full sweep\n");
+					}
+				}
+				if (focus_step >= 0) {
+					phase = 5;
+				} else if (phase == 5) {
+					static int hold_count;
+					if (++hold_count % 30 == 0)
+						printf("[af] hold step %d score %lu\n",
+						       act_curr,
+						       af_sharpness(latest_y));
+				} else if (phase == 4) {
+					/* The one-step preload has settled; move
+					 * forward to the chosen step.  This is the
+					 * same short forward move that produced the
+					 * fine peak, so the VCM backlash lands in the
+					 * same place. */
+					if (++final_settle >= 3) {
+						actuator_move(best_step);
+						printf("[af] focus step %d\n",
+						       best_step);
+						phase = 5;
+						af_sweeping = 0;
+					}
+				} else if (++settle >= (phase == 2 ? 3 : 4)) {
+					/* Four frames, not two: the lens has to
+					 * have arrived before the frame is
+					 * scored.  The kernel writes every
+					 * intermediate lens code (nine per step)
+					 * and the voice coil needs a moment to
+					 * catch up, so a frame taken too early
+					 * is a picture of the lens still
+					 * travelling -- the peak then lands on
+					 * the wrong step, and the focus drifts
+					 * afterwards as the lens settles. */
+					unsigned long score = af_sharpness(latest_y);
+					settle = 0;
+					if (phase == 0) {
+						phase = 1;
+						step = 0;
+						coarse_best_step = 0;
+						coarse_best_score = 0;
+						/* The sweep starts by itself, without
+						 * a request, so the state machine
+						 * has to say so: the
+						 * auto-exposure holds still while
+						 * the focus is being measured. */
+						af_sweeping = 1;
+						actuator_move(0);
+					} else if (phase == 1) {
+						printf("[af] step %d score %lu\n",
+						       step, score);
+						if (score > coarse_best_score) {
+							coarse_best_score = score;
+							coarse_best_step = step;
+							coarse_best_mean = latest_mean;
+						}
+						/* The macro end is step 44, not 45. */
+						if (step >= ACT_TOTAL_STEPS - 1) {
+							phase = 2;
+							/* The coarse peak can be a few
+							 * steps off.  Search a +/-5
+							 * window and start at its low
+							 * end, so every fine step is
+							 * approached forward. */
+							fine_lo = coarse_best_step - 5;
+							if (fine_lo < 0)
+								fine_lo = 0;
+							fine_hi = coarse_best_step + 5;
+							if (fine_hi >= ACT_TOTAL_STEPS)
+								fine_hi = ACT_TOTAL_STEPS - 1;
+							fine_best_step = fine_lo;
+							fine_best_score = 0;
+							step = fine_lo;
+							printf("[af] fine start %d\n",
+							       step);
+						} else {
+							/* Eight steps at a time: the
+							 * fine window below is wide
+							 * enough to cover the gap, and
+							 * the sweep costs the user
+							 * less time. */
+							step += 8;
+							if (step >= ACT_TOTAL_STEPS)
+								step = ACT_TOTAL_STEPS - 1;
+						}
+						actuator_move(step);
+					} else if (phase == 2) {
+						printf("[af] fine %d score %lu\n",
+						       step, score);
+						if (score > fine_best_score) {
+							fine_best_score = score;
+							fine_best_step = step;
+							fine_best_mean = latest_mean;
+						}
+						step++;
+						if (step > fine_hi) {
+							if (local_search &&
+							    (fine_best_score < 300000 ||
+							     fine_best_step == fine_lo ||
+							     fine_best_step == fine_hi)) {
+								/* The cached focus is stale; search
+								 * the whole range. */
+								local_search = 0;
+								phase = 0;
+								settle = 0;
+								printf("[af] local weak, full sweep\n");
+							} else {
+								/* Prefer the fine peak when it is
+								 * comparable to the coarse one; the
+								 * coarse step is only a fallback if
+								 * the fine window found nothing. */
+								if (fine_best_score > 0 &&
+								    fine_best_score * 2 >=
+								    coarse_best_score) {
+									best_step = fine_best_step;
+									best_score = fine_best_score;
+									best_mean = fine_best_mean;
+								} else {
+									best_step = coarse_best_step;
+									best_score = coarse_best_score;
+									best_mean = coarse_best_mean;
+								}
+								last_focus_step = best_step;
+								af_sweeping = 0;
+								/* Keep how sharp this position was, divided
+								 * by how bright the frame was.  A scan that
+								 * finds the picture already this sharp can
+								 * skip the sweep altogether. */
+								af_best_contrast = best_score * 1000 /
+								    (best_mean > 0 ? best_mean : 1);
+								local_search = 0;
+								printf("[af] cached %d\n",
+									last_focus_step);
+								phase = 4;
+								final_settle = 0;
+								step = best_step - 1;
+								if (step < 0)
+									step = 0;
+								printf("[af] final preload %d -> %d\n",
+									step, best_step);
+								actuator_move(step);
+							}
+						} else {
+							actuator_move(step);
+						}
+					}
+				af_done: ;
+				}
+			}
+			}
+proc_done:
+			if (p_y != MAP_FAILED) munmap(p_y, y_sz);
+			if (p_uv != MAP_FAILED) munmap(p_uv, uv_sz);
+		}
+
+		/*
+		 * Pick the CPP's input buffer for the next frame from the
+		 * ring of buffers the ISP has just been given back.  This
+		 * must run whether or not a client is reading: it used to
+		 * live inside the "!idle" block, so with no client the
+		 * CPP was pointed at (buf.index + 1) instead -- the
+		 * buffer the ISP was about to write, not the one it had
+		 * finished.  Keep the two paths selecting the same buffer.
+		 */
+		if (camd_q_count > 0) {
+			cpp_input_index = camd_q[camd_q_head];
+			camd_q_head = (camd_q_head + 1) % camd_q_count;
+		}
+
+		p6 = now_ns();
+
+		/* re-queue the buffer */
+		{
+			struct v4l2_plane qplanes[2];
+			memset(qplanes, 0, sizeof(qplanes));
+			qplanes[0].m.userptr = (unsigned long)bufs[buf.index];
+			qplanes[0].length = width * height;
+			qplanes[1].m.userptr = cbufs.planes[buf.index][1].m.userptr;
+			qplanes[1].length = full_chroma ? width * height
+							: (width * height) / 2;
+			cbufs.buf[buf.index].m.planes = qplanes;
+			cbufs.buf[buf.index].length = 2;
+			if (ioctl(fd, VIDIOC_QBUF,
+				  &cbufs.buf[buf.index]) < 0) {
+				qfail++;
+				if (qfail <= 10 || qfail % 100 == 0)
+					printf("[client] QBUF %u: %s (qfail=%d)\n",
+					       buf.index, strerror(errno), qfail);
+			}
+			if (camd_q_count > 0) {
+				camd_q[camd_q_tail] = buf.index;
+				camd_q_tail = (camd_q_tail + 1) % camd_q_count;
+			}
+		}
+		if (stalled) {
+			/*
+			 * The same buffer keeps coming back: the ISP is not
+			 * writing and the stream is not recovering by
+			 * itself.  Do NOT try STREAMOFF/STREAMON to restart
+			 * it -- on this kernel STREAMOFF does not release
+			 * the ISP write masters, STREAMON then fails with
+			 * "No free write masters", the buffers never return
+			 * and the hardware watchdog bites (wdog_bite).
+			 * Just back off so the stall does not spin a core;
+			 * a reboot is the only recovery.
+			 */
+			static int s_log;
+			if (s_log++ < 5)
+				printf("[client] stalled on one buffer; backing off\n");
+			struct timespec ts = { 0, 100 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
+		}
+		/*
+		 * With no client the VFE can complete the same buffers at
+		 * its own rate, and the loop then runs flat out for nothing
+		 * (measured at ~180 completions a second).  Keep the
+		 * DQBUF/requeue -- the queue must keep rotating or the next
+		 * client is starved -- but give the CPU back between
+		 * frames.  The first request clears idle and the delay with
+		 * it.
+		 */
+		if (idle > 3) {
+			struct timespec ts = { 0, 20 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
+		}
+		p7 = now_ns();
+
+		{
+			uint64_t upd = p1 - p0, cpp = p2 - p1, rep = p3 - p2;
+			uint64_t wait = p4 - p3, dq = p5 - p4, dbg = p5a - p5;
+			uint64_t down = p6 - p5a, q = p7 - p6;
+			uint64_t pace = 0;
+
+			if (target_fps > 0) {
+				uint64_t period =
+					1000000000ULL / (uint64_t)target_fps;
+				uint64_t elapsed = p7 - p0;
+				if (elapsed < period) {
+					uint64_t ns = period - elapsed;
+					struct timespec ts;
+					ts.tv_sec = ns / 1000000000ULL;
+					ts.tv_nsec = ns % 1000000000ULL;
+					nanosleep(&ts, NULL);
+					pace = now_ns() - p7;
+				}
+			}
+
+			a_upd += upd;
+			a_cpp += cpp;
+			a_rep += rep;
+			a_wait += wait;
+			a_dq += dq;
+			a_dbg += dbg;
+			a_down += down;
+			a_q += q;
+			a_pace += pace;
+			a_tot += p7 - p0 + pace;
+			pn++;
+
+			if (profile_mode >= 2)
+				printf("[prof] n=%d upd=%.2f cpp=%.2f "
+				       "rep=%.2f wait=%.2f dq=%.2f dbg=%.2f "
+				       "down=%.2f q=%.2f pace=%.2f tot=%.2f "
+				       "fps=%.1f\n",
+				       n, upd / 1e6, cpp / 1e6, rep / 1e6,
+				       wait / 1e6, dq / 1e6, dbg / 1e6,
+				       down / 1e6, q / 1e6, pace / 1e6,
+				       (p7 - p0 + pace) / 1e6,
+				       1e9 / (double)(p7 - p0 + pace));
+			if (profile_mode >= 1 && pn >= 10) {
+				double d = (double)pn;
+				printf("[prof-sum] wall=%ld frames=%d avg_ms "
+				       "upd=%.2f cpp=%.2f rep=%.2f wait=%.2f "
+				       "dq=%.2f dbg=%.2f down=%.2f q=%.2f "
+				       "pace=%.2f tot=%.2f fps=%.1f\n",
+				       (long)time(NULL), pn,
+				       a_upd / d / 1e6, a_cpp / d / 1e6,
+				       a_rep / d / 1e6, a_wait / d / 1e6,
+				       a_dq / d / 1e6, a_dbg / d / 1e6,
+				       a_down / d / 1e6, a_q / d / 1e6,
+				       a_pace / d / 1e6,
+				       a_tot / d / 1e6,
+				       1e9 / (a_tot / d));
+				a_upd = a_cpp = a_rep = a_wait = a_dq = 0;
+				a_dbg = a_down = a_q = a_pace = a_tot = 0;
+				pn = 0;
+			}
+		}
+
+		fflush(stdout);
+	}
+
+	ioctl(fd, VIDIOC_STREAMOFF, &rb.type);
+	printf("[client] done\n");
+	return NULL;
+}
+
+static int socket_read_exact(int fd, void *buf, size_t n)
+{
+	unsigned char *p = buf;
+	while (n > 0) {
+		ssize_t r = read(fd, p, n);
+		if (r <= 0)
+			return -1;
+		p += r;
+		n -= r;
+	}
+	return 0;
+}
+
+static void *socket_thread(void *arg)
+{
+	int sfd, cfd;
+	/* socket thread */
+	struct sockaddr_un addr;
+	char buf[1];
+
+	unlink("/data/krux/camd.sock");
+	mkdir("/data/krux", 0755);
+#ifdef KRUX_RELEASE
+	chmod("/data/krux", 0700);
+#endif
+	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sfd < 0) { perror("socket"); return NULL; }
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, "/data/krux/camd.sock", sizeof(addr.sun_path) - 1);
+	if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) { perror("bind"); return NULL; }
+	listen(sfd, 4);
+	chmod("/data/krux/camd.sock", 0600);
+
+	for (;;) {
+		cfd = accept(sfd, NULL, NULL);
+		if (cfd < 0) continue;
+		for (;;) {
+			int r = read(cfd, buf, 1);
+			if (r <= 0) break;
+			if (buf[0] == 'A') {
+				/* "I am reading the shared frame": keep the
+				 * per-frame work on, without sending one. */
+				note_frame_request();
+				frame_requests++;
+				write(cfd, "OK", 2);
+			} else if (buf[0] == 'F') {
+				unsigned char hdr[32];
+				note_frame_request();
+				frame_requests++;
+				memset(hdr, 0, 32);
+				memcpy(hdr, "KCF1", 4);
+				int seq;
+				int ready;
+				unsigned char *copy = NULL;
+				size_t ysz = (size_t)out_w * out_h;
+				size_t uvsz = (size_t)(out_w / 2) * (out_h / 2) * 2;
+
+				pthread_mutex_lock(&frame_mutex);
+				seq = latest_seq;
+				ready = latest_ready;
+				if (ready && latest_y && latest_uv) {
+					copy = malloc(ysz + uvsz);
+					if (copy) {
+						memcpy(copy, latest_y, ysz);
+						memcpy(copy + ysz, latest_uv, uvsz);
+					}
+				}
+				pthread_mutex_unlock(&frame_mutex);
+				{
+					static int fcount;
+					if (++fcount % 200 == 0)
+						printf("[sock] F #%d seq=%d ready=%d copy=%d\n",
+						       fcount, seq, ready, copy != NULL);
+				}
+
+				if (copy) {
+					hdr[31] = 0;
+					/* Is the autofocus sweeping?  The
+					 * sharpness scores of a sweep are
+					 * only comparable within one
+					 * exposure, so the auto-exposure
+					 * has to hold still while it
+					 * runs. */
+					hdr[18] = af_sweeping ? 1 : 0;
+					hdr[19] = (unsigned char)luma_gain;
+					hdr[4] = seq & 0xff; hdr[5] = (seq>>8)&0xff;
+					hdr[6] = (seq>>16)&0xff; hdr[7] = (seq>>24)&0xff;
+					hdr[8] = out_w & 0xff; hdr[9] = (out_w>>8)&0xff;
+					hdr[10] = out_h & 0xff; hdr[11] = (out_h>>8)&0xff;
+					hdr[12] = out_w & 0xff; hdr[13] = (out_w>>8)&0xff;
+					hdr[14] = out_h & 0xff; hdr[15] = (out_h>>8)&0xff;
+					hdr[16] = out_w & 0xff; hdr[17] = (out_w>>8)&0xff;
+					hdr[20] = (out_w/2) & 0xff; hdr[21] = ((out_w/2)>>8)&0xff;
+					hdr[24] = (ysz) & 0xff; hdr[25] = ((ysz)>>8)&0xff;
+					hdr[26] = ((ysz)>>16)&0xff; hdr[27] = ((ysz)>>24)&0xff;
+					hdr[28] = (uvsz) & 0xff; hdr[29] = ((uvsz)>>8)&0xff;
+					hdr[30] = ((uvsz)>>16)&0xff; hdr[31] = ((uvsz)>>24)&0xff;
+					write(cfd, hdr, 32);
+					write(cfd, copy, ysz + uvsz);
+					free(copy);
+				} else {
+					hdr[31] = 1;
+					write(cfd, hdr, 32);
+				}
+			} else if (buf[0] == 'R') {
+				printf("[af] full refocus request (frame socket)\n");
+				refocus_full = 1;
+				refocus_request = 1;
+				write(cfd, "OK", 2);
+			} else if (buf[0] == 'r') {
+				printf("[af] cached refocus request (frame socket)\n");
+				refocus_full = 0;
+				refocus_request = 1;
+				write(cfd, "OK", 2);
+			} else if (buf[0] == 'D') {
+				dump_now = 1;
+				write(cfd, "OK", 2);
+			} else if (buf[0] == 'C') {
+				/* A QR retry: the rectangle is in preview
+				 * pixels; publish it 1:1 from the last
+				 * bounce into /tmp/krux/crop. */
+				unsigned char p[8];
+				if (socket_read_exact(cfd, p, 8) == 0) {
+					int px = (p[0] << 8) | p[1];
+					int py = (p[2] << 8) | p[3];
+					int pw = (p[4] << 8) | p[5];
+					int ph = (p[6] << 8) | p[7];
+					int rc = crop_publish(px, py, pw, ph);
+					printf("[crop] (%d,%d,%d,%d) -> %s\n",
+					       px, py, pw, ph,
+					       rc == 0 ? "ok" : "fail");
+					write(cfd, rc == 0 ? "OK" : "ER", 2);
+				}
+			} else if (buf[0] == 'W') {
+				unsigned char p[3];
+				if (socket_read_exact(cfd, p, 3) == 0) {
+					struct imx179_reg r;
+					r.addr = (p[0] << 8) | p[1];
+					r.data = p[2];
+					r.delay = 0;
+					write(cfd, sensor_write_regs(&r, 1) == 0 ?
+					      "OK" : "ER", 2);
+				}
+			} else if (buf[0] == 'E') {
+				unsigned char p[4];
+				if (socket_read_exact(cfd, p, 4) == 0) {
+					/* Exposure (0x0202) and gain (0x0204) are
+					 * 16-bit registers.  Writing them as two
+					 * separate byte writes leaves the gain
+					 * effectively stuck until the maximum
+					 * value, so use 16-bit word writes. */
+					int erc = sensor_set_exposure_gain(
+						(p[0] << 8) | p[1],
+						(p[2] << 8) | p[3]);
+					if (erc == 0) {
+						int nexp = (p[0] << 8) | p[1];
+						int ngain = (p[2] << 8) | p[3];
+						if (cam_exposure >= 0 &&
+						    (nexp != cam_exposure ||
+						     ngain != cam_gain)) {
+							if (af_sweeping) {
+								/* The scores of the
+								 * running sweep are
+								 * not comparable
+								 * any more: abandon
+								 * it.  Do NOT ask
+								 * for another one.
+								 *
+								 * The exposure follows
+								 * the scene while the
+								 * user aims, so asking
+								 * for a sweep on every
+								 * change made the two
+								 * chase each other: the
+								 * exposure changed, the
+								 * sweep restarted, the
+								 * sweep moved the lens,
+								 * the exposure changed
+								 * again.  The picture
+								 * blinked and then sat
+								 * in the dark while the
+								 * sweep ran, over and
+								 * over.  A sweep is only
+								 * started when the user
+								 * asks for one. */
+								af_abort = 1;
+								printf("[af] exposure "
+								       "changed, sweep "
+								       "abandoned\n");
+							}
+						}
+						cam_exposure = nexp;
+						cam_gain = ngain;
+					}
+					if (erc == 0) {
+						uint16_t e1 = 0, e2 = 0, g1 = 0, g2 = 0;
+						sensor_read_reg(0x0202, &e1);
+						sensor_read_reg(0x0203, &e2);
+						sensor_read_reg(0x0204, &g1);
+						sensor_read_reg(0x0205, &g2);
+						printf("[sensor] E exp=0x%02x%02x gain=0x%02x%02x\n",
+						       e1 & 0xff, e2 & 0xff,
+						       g1 & 0xff, g2 & 0xff);
+					}
+					write(cfd, erc == 0 ? "OK" : "ER", 2);
+				}
+			} else if (buf[0] == 'G') {
+				unsigned char p[1];
+				if (socket_read_exact(cfd, p, 1) == 0) {
+					int g = p[0];
+					if (g < 1)
+						g = 1;
+					if (g > 4)
+						g = 4;
+					luma_gain = g;
+					printf("[cam] luma gain %d\n", g);
+					write(cfd, "OK", 2);
+				}
+			} else if (buf[0] == 'V') {
+				unsigned char p[2];
+				if (socket_read_exact(cfd, p, 2) == 0) {
+					/* VMAX is a 16-bit geometry register.  The sensor's
+					 * vendor sequence writes it as one WORD_DATA value;
+					 * two BYTE_DATA writes can leave exposure clamped to
+					 * the previous frame length. */
+					struct imx179_reg r = {
+						0x0340, (p[0] << 8) | p[1], 0
+					};
+					int rc = sensor_write_regs_as(
+						&r, 1, MSM_CAMERA_I2C_WORD_DATA);
+					if (rc == 0) {
+						uint16_t high = 0, low = 0;
+						normal_vts = (p[0] << 8) | p[1];
+						vts_slowed = 0;
+						if (sensor_read_reg(0x0340, &high) == 0 &&
+						    sensor_read_reg(0x0341, &low) == 0)
+							printf("[sensor] VMAX set to 0x%02x%02x\n",
+							       high & 0xff, low & 0xff);
+					}
+					write(cfd, rc == 0 ? "OK" : "ER", 2);
+				}
+			} else if (buf[0] == 'Q' || buf[0] == 'S') {
+				write(cfd, "OK", 2);
+				/* The init supervisor starts a fresh camd for every
+				 * camera session: reusing the CPP queue across
+				 * sessions leaves the second preview dark. */
+				if (buf[0] == 'Q')
+					_exit(0);
+			}
+		}
+		close(cfd);
+	}
+	return NULL;
+}
+
+/* A second, independent socket for host-side diagnostics.  The frame
+ * socket is held open by the firmware for the whole session, so a host
+ * client that connects to it would block in accept().  This socket only
+ * sets the same flags and returns immediately. */
+static void *ctl_thread(void *arg)
+{
+	int sfd, cfd;
+	struct sockaddr_un addr;
+	char c;
+
+	unlink("/data/krux/camd-ctl.sock");
+	mkdir("/data/krux", 0755);
+#ifdef KRUX_RELEASE
+	chmod("/data/krux", 0700);
+#endif
+	sfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (sfd < 0) {
+		perror("ctl socket");
+		return NULL;
+	}
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, "/data/krux/camd-ctl.sock",
+		sizeof(addr.sun_path) - 1);
+	if (bind(sfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("ctl bind");
+		return NULL;
+	}
+	listen(sfd, 4);
+	chmod("/data/krux/camd-ctl.sock", 0600);
+	for (;;) {
+		cfd = accept(sfd, NULL, NULL);
+		if (cfd < 0)
+			continue;
+		if (read(cfd, &c, 1) == 1) {
+			if (c == 'E') {
+				/* The exposure and the gain, so the setting
+				 * can be found from the host without the
+				 * camera page in the way. */
+				unsigned char p[4];
+				if (read(cfd, p, 4) == 4) {
+					int nexp = (p[0] << 8) | p[1];
+					int ngain = (p[2] << 8) | p[3];
+					int erc = sensor_set_exposure_gain(
+						nexp, ngain);
+					if (erc == 0) {
+						cam_exposure = nexp;
+						cam_gain = ngain;
+						printf("[sensor] E exp=0x%04x gain=0x%04x (ctl)\n",
+						       nexp, ngain);
+					}
+					write(cfd, erc == 0 ? "OK" : "ER", 2);
+				}
+			} else if (c == 'D') {
+				dump_now = 1;
+				/* Ask for a frame as well: the frame work
+				 * is skipped while no client is asking,
+				 * and the dump needs a frame. */
+				note_frame_request();
+				frame_requests++;
+				write(cfd, "OK", 2);
+			} else if (c == 'c') {
+				/* Toggle the raw linear-crop diagnostic. */
+				rawcrop = !rawcrop;
+				note_frame_request();
+				frame_requests++;
+				printf("[mode] raw linear crop %s\n",
+				       rawcrop ? "on" : "off");
+				write(cfd, rawcrop ? "1" : "0", 1);
+			} else if (c == 'R') {
+				printf("[af] full refocus request (ctl)\n");
+				refocus_full = 1;
+				refocus_request = 1;
+				write(cfd, "OK", 2);
+			} else if (c == 'r') {
+				printf("[af] cached refocus request (ctl)\n");
+				refocus_full = 0;
+				refocus_request = 1;
+				write(cfd, "OK", 2);
+			} else if (c == 'C') {
+				/* A QR retry: the rectangle is in preview
+				 * pixels; publish it 1:1 from the last
+				 * bounce into /tmp/krux/crop. */
+				unsigned char p[8];
+				if (socket_read_exact(cfd, p, 8) == 0) {
+					int px = (p[0] << 8) | p[1];
+					int py = (p[2] << 8) | p[3];
+					int pw = (p[4] << 8) | p[5];
+					int ph = (p[6] << 8) | p[7];
+					int rc = crop_publish(px, py, pw, ph);
+					printf("[crop] (%d,%d,%d,%d) -> %s\n",
+					       px, py, pw, ph,
+					       rc == 0 ? "ok" : "fail");
+					write(cfd, rc == 0 ? "OK" : "ER", 2);
+				}
+			} else {
+				write(cfd, "ER", 2);
+			}
+		}
+		close(cfd);
+	}
+	return NULL;
+}
+
+int main(int argc, char **argv)
+{
+	pthread_t server, client;
+	int wh[2] = { 640, 480 };
+	signal(SIGPIPE, SIG_IGN);
+
+	setvbuf(stdout, NULL, _IONBF, 0);
+	cpp_msg_load();
+	{
+		const char *p = getenv("CAMD_PROFILE");
+		const char *d = getenv("CAMD_DEBUG_FRAMES");
+		const char *b = getenv("CAMD_BENCH");
+		const char *f = getenv("CAMD_TARGET_FPS");
+		const char *fc = getenv("CAMD_FULL_CHROMA");
+		const char *vs = getenv("CAMD_VENDOR_SEQ");
+		profile_mode = p ? atoi(p) : 0;
+		/*
+		 * The profile can also be turned on from the data
+		 * partition, which survives the reboot a test needs: the
+		 * environment of the init that starts us is not ours to
+		 * set.
+		 */
+		if (state_read_persist("profile", 0, 0, 2))
+			profile_mode = 1;
+		debug_frames = d ? atoi(d) : 0;
+		bench_mode = b ? atoi(b) : 0;
+		target_fps = f ? atoi(f) : 0;
+		full_chroma = fc ? atoi(fc) : 0;
+		use_vendor_sensor_seq = vs ? atoi(vs) : 0;
+#ifdef KRUX_RELEASE
+		/* no frame files, and no state on /data */
+		debug_frames = 0;
+		persist_dir = CAMD_STATE_DIR;
+#endif
+		printf("[prof] profile=%d debug_frames=%d bench=%d target_fps=%d full_chroma=%d\n",
+		       profile_mode, debug_frames, bench_mode, target_fps,
+		       full_chroma);
+	}
+	{
+		/* The tuning state.  It is volatile: a missing file is
+		 * written out with its default, so the camera always has a
+		 * complete configuration and nothing here is required for
+		 * it to work. */
+		af_level = state_read("af", 2, 0, 4);
+		/* Focus is set before streaming: moving the lens while the
+		 * sensor streams stalls the pipeline (shared CCI bus). */
+		focus_step = state_read("focus", -1, -1, ACT_TOTAL_STEPS - 1);
+		if (focus_step < 0)
+			focus_step = -1;
+		luma_gain = state_read("luma_gain", 1, 1, 4);
+		unsharp_amount = state_read("unsharp", 0, 0, 2);
+		if (state_read("bench", 0, 0, 1))
+			bench_mode = 1;
+		printf("[state] af=%d focus=%d luma_gain=%d unsharp=%d bench=%d\n",
+		       af_level, focus_step, luma_gain, unsharp_amount,
+		       bench_mode);
+	}
+	{
+		FILE *f = fopen("/data/krux/ispcfg", "r");
+		if (f) {
+			int n;
+			if (fscanf(f, "%d", &n) == 1 && n >= 0 &&
+			    n <= CAM_INITIAL_COUNT)
+				isp_cfg_count = n;
+			fclose(f);
+		}
+		printf("[isp] initial configuration: %d of %d uploads\n",
+		       isp_cfg_count < 0 ? CAM_INITIAL_COUNT : isp_cfg_count,
+		       CAM_INITIAL_COUNT);
+	}
+	if (argc > 2) {
+		wh[0] = atoi(argv[1]);
+		wh[1] = atoi(argv[2]);
+	}
+	if (argc > 3)
+		ion_mask_override = strtoul(argv[3], NULL, 0);
+	if (argc > 4 && !strcmp(argv[4], "front"))
+		cam = &cam_front;
+	if (argc > 5)
+		front_cmd_count = atoi(argv[5]);
+	if (argc > 6)
+		cpp_fw_path = argv[6];
+	if (argc > 7)
+		isp_stream_src = strtoul(argv[7], NULL, 0);
+	if (argc > 8 && !strcmp(argv[8], "binned")) {
+		cam = &cam_binned;
+	}
+	/*
+	 * The ISP stream source is a persistent knob: 0 = CAMIF_RAW (the
+	 * raw Bayer, then the CPP), 1 = PIX_VIEWFINDER (the vendor's
+	 * processed preview, through the CPP).  PIX is the default: it
+	 * is the path the stock camera uses, and it is the only one the
+	 * vendor's 266-word preview message is written for.  It has to
+	 * be read before the sensor mode, because PIX needs the full
+	 * sensor frame (with the binned 1640x1232 input the CPP rejects
+	 * the message).
+	 */
+	if (state_read_persist("stream", 1, 0, 1) == 1) {
+		isp_stream_src = PIX_VIEWFINDER;
+		printf("[mode] ISP stream: PIX_VIEWFINDER (processed)\n");
+	}
+	idle_vts = state_read_persist("idle_vts", 0, 0, 0xFFFF);
+	idle_after = state_read_persist("idle_after", 5, 0, 3600);
+	last_request_at = time(NULL);
+	printf("[stream] idle VTS 0x%04x after %ds (0 disables)\n",
+	       idle_vts, idle_after);
+	/*
+	 * The sensor mode is a persistent knob: 0 = the binned 1640x1232
+	 * mode, 1 = the full 3280x2464 mode.  The vendor's preview is a
+	 * full-sensor 1280x960 output; the binned input makes the CPP
+	 * reject its message, so PIX forces the full mode.
+	 */
+	{
+		int full = state_read_persist("mode", 0, 0, 1);
+		if (isp_stream_src == PIX_VIEWFINDER && !full) {
+			full = 1;
+			printf("[mode] PIX_VIEWFINDER needs the full sensor frame\n");
+		}
+		if (full) {
+			cam = &cam_rear;
+			wh[0] = cam->width;
+			wh[1] = cam->height;
+			printf("[mode] full resolution: %dx%d\n",
+			       wh[0], wh[1]);
+		}
+	}
+	/*
+	 * The window the preview and the QR retry are taken from.  Full
+	 * resolution: by default a square centre crop (2160x2160),
+	 * halved to 1080x1080, so the preview, the entropy and the QR
+	 * retry share one integer scaling; with fov=1 the whole frame,
+	 * downscaled once to 960x1280.  Binned: the whole 3:4 frame at
+	 * 720x960, as before.  PIX_VIEWFINDER: the vendor preview's
+	 * processed 1280x960, packed at stride 1280.
+	 */
+	if (isp_stream_src == PIX_VIEWFINDER) {
+		/*
+		 * The vendor's own preview request is 1280x960 and the
+		 * CPP's 266-word message is written for exactly that.
+		 * The frame is packed luma at a 1280-byte stride, at
+		 * offset 0 of the output buffer -- which is a 3280x2464
+		 * allocation.  Reading it at the allocation's stride
+		 * spreads the 1,228,800-byte picture over 374 rows and
+		 * shows only the top band; this was the band.
+		 * Rotated 90 degrees CCW it is exactly 960x1280, 1:1
+		 * (no resampling), the same portrait size as fov=1 and
+		 * the decoder's K_QUIRC_MAX_IMAGE_DIM.
+		 */
+		crop_w = 1280;
+		crop_h = 960;
+		crop_x = crop_y = 0;
+		out_w = 960;
+		out_h = 1280;
+		read_stride = 1280;
+	} else if (!cam->binned && state_read_persist("fov", 0, 0, 1) == 1) {
+		/*
+		 * The whole frame, not a centre crop: the CPP passes the
+		 * sensor's 3280x2464 raw through unchanged, so this is
+		 * the only geometry with nothing cut away.  It is
+		 * downscaled once, by 2.56, to the largest 3:4 picture
+		 * that fits both endpoints: 960x1280 after the rotation
+		 * is 1:1 on the 1080x1920 panel and exactly the
+		 * decoder's K_QUIRC_MAX_IMAGE_DIM.  The same picture is
+		 * the preview, the QR scan and the entropy source.
+		 */
+		crop_w = cam->width;
+		crop_h = cam->height;
+		crop_x = crop_y = 0;
+		out_w = 960;
+		out_h = 1280;
+		read_stride = cam->width;
+	} else if (!cam->binned) {
+		crop_w = crop_h = FULL_CROP;
+		crop_x = (cam->width - crop_w) / 2;
+		crop_y = (cam->height - crop_h) / 2;
+		out_w = out_h = FULL_CROP / 2;
+		read_stride = cam->width;
+	} else {
+		crop_w = cam->width;
+		crop_h = cam->height;
+		crop_x = crop_y = 0;
+		out_w = OUT_W;
+		out_h = OUT_H;
+		read_stride = cam->width;
+	}
+	printf("[mode] window %dx%d at (%d,%d) -> preview %dx%d\n",
+	       crop_w, crop_h, crop_x, crop_y, out_w, out_h);
+	/*
+	 * The vendor's per-capture ISP configuration, another /tmp knob.
+	 * It is captured from the ROM's camera stack and may carry the
+	 * noise reduction that suppresses the screen's moire.
+	 */
+	if (state_read_persist("capture_cfg", 0, 0, 1) == 1) {
+		send_capture_config = 1;
+		printf("[mode] ISP capture configuration: sent\n");
+	}
+	if (argc > 9 && !strcmp(argv[9], "nocfg"))
+		replay_config = 0;
+	if (argc > 10 && !strcmp(argv[10], "nocycle"))
+		replay_cycle = 0;
+	/*
+	 * The per-frame cycle is the vendor's capture cycle: it sets
+	 * the SFE's and the CAMIF's geometry for the photograph.  It is
+	 * what the full-resolution mode needs -- the preview's geometry
+	 * does not fit a 3280x2464 frame -- and it is a knob, because
+	 * it is only right for that mode.
+	 */
+	if (state_read_persist("cycle", 1, 0, 1) == 1) {
+		replay_cycle = 1;
+		printf("[mode] the per-frame ISP cycle: on\n");
+	}
+	if (argc > 11)
+		cam_vc = atoi(argv[11]);
+	if (argc > 12)
+		cam_dt = strtoul(argv[12], NULL, 0);
+	if (argc > 13)
+		cam_cid = atoi(argv[13]);
+	if (argc > 14)
+		cam_csid = atoi(argv[14]);
+	if (argc > 15)
+		frames_to_wait = atoi(argv[15]);
+	if (argc > 16)
+		isp_vfe = atoi(argv[16]);
+	if (argc > 18)
+		pix_clk_override = strtoul(argv[18], NULL, 0);
+	if (argc > 19)
+		cam_dt_other = strtoul(argv[19], NULL, 0);
+	if (argc > 20)
+		lut_cid0 = atoi(argv[20]);
+	if (argc > 21)
+		lut_cid1 = atoi(argv[21]);
+	if (argc > 22)
+		poke_reg = strtoul(argv[22], NULL, 0);
+	if (argc > 23)
+		poke_val = strtoul(argv[23], NULL, 0);
+	if (argc > 24)
+		two_cids = atoi(argv[24]);
+	if (argc > 25)
+		use_live_sensor_seq = atoi(argv[25]);
+	if (argc > 26)
+		crop_enable = atoi(argv[26]);
+	if (argc > 27)
+		send_capture_config = atoi(argv[27]);
+	if (pix_clk_override)
+		printf("[isp] pixel clock override %u\n", pix_clk_override);
+	if (argc > 17)
+		ispif_vfe = atoi(argv[17]);
+	printf("[isp] ISP subdev %d, ISP-IF VFE %d\n",
+		isp_vfe ? 14 : 13, ispif_vfe);
+	printf("[ispif] virtual channel (cid) %d, csid %d\n", cam_cid, cam_csid);
+	printf("[mipi] channel %d: data type 0x%02x (and 0x%02x on the other channel)\n", cam_cid, cam_dt, cam_dt_other);
+	printf("[mipi] the CSID's LUT: cid %d = 0x%02x, cid %d = 0x%02x\n",
+	       lut_cid0, cam_dt, lut_cid1, cam_dt_other);
+	printf("[sensor] the sensor's registers: %s\n",
+	       use_live_sensor_seq == 1 ? "the vendor's live list" :
+	       use_live_sensor_seq == 2 ? "the page sequence + the live list" :
+	       "the captured arrays");
+	printf("[isp] the capture's configuration: %s\n",
+	       send_capture_config ? "sent" : "not sent");
+	printf("[ispif] the crop: %s\n",
+	       crop_enable ? "enabled" : "disabled (the vendor's own setting)");
+	printf("[isp] replay: initial configuration %s, per-frame cycle %s\n",
+	       replay_config ? "on" : "off", replay_cycle ? "on" : "off");
+	printf("[isp] stream source: %u (%s)\n", isp_stream_src,
+	       isp_stream_src == PIX_ENCODER ? "PIX_ENCODER" :
+	       isp_stream_src == PIX_VIEWFINDER ? "PIX_VIEWFINDER" :
+	       isp_stream_src == CAMIF_RAW ? "CAMIF_RAW" :
+	       isp_stream_src == IDEAL_RAW ? "IDEAL_RAW" : "other");
+	printf("=== camera: %s (%s, subdev %s) ===\n", cam->name,
+	       cam->sensor_node, cam->sensor_subdev);
+
+	sensor_fd = open(cam->sensor_subdev, O_RDWR);
+	if (sensor_fd < 0) {
+		printf("[sensor] open %s: %s\n", cam->sensor_subdev, strerror(errno));
+		return 1;
+	}
+	printf("[sensor] %s open\n", cam->sensor_subdev);
+
+	shm_init();
+	crop_shm_init();
+
+	pthread_create(&server, NULL, server_thread, NULL);
+	pthread_create(&client, NULL, client_thread, wh);
+	{
+		pthread_t sockt;
+		pthread_create(&sockt, NULL, socket_thread, NULL);
+	}
+	{
+		pthread_t ctl;
+		pthread_create(&ctl, NULL, ctl_thread, NULL);
+	}
+
+	pthread_join(client, NULL);
+	pthread_cancel(server);
+	return 0;
+}
