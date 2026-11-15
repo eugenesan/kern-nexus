@@ -1,5 +1,5 @@
 /*
- * SeedKeeper / Satochip applet layer, plaintext flows.
+ * SeedKeeper / Satochip applet layer.
  *
  * Ported from krux/src/krux/seedkeeper.py, which follows the SeedSigner fork
  * by 3rdIteration and pysatochip.  The wire bytes here are the reference:
@@ -7,13 +7,18 @@
  *   SELECT      00 A4 04 00 0A "SeedKeeper"
  *   VERIFY_PIN  B0 42 00 00 <len> <pin>
  *   GET_STATUS  B0 3C 00 00
+ *   MEMORY      B0 A7 00 00
  *   LIST        B0 A6 00 01, then B0 A6 00 02 until 9C12
+ *   GENERATE    B0 A0 <size> <rights> <label>      (random Masterseed)
+ *                B0 A3 <size> <rights> <type|sub|save|label|entropy>
  *   IMPORT      B0 A1 01 01 <header|size>, B0 A1 01 02 chunks,
  *               B0 A1 01 03 <last chunk>
  *   EXPORT      B0 A2 01 01 02 <id>, then B0 A2 01 02 02 <id> chunks
  *   RESET       B0 A5 00 00 02 <id>
  *
- * The secure channel (P1=0x02) is not implemented; see seedkeeper.h.
+ * A card with needs_secure_channel set wraps every command but SELECT,
+ * GET_STATUS and the secure-channel instructions themselves in the applet's
+ * secure channel (INS 0x81/0x82); see sk_sc_wrap() below.
  */
 
 #include "seedkeeper.h"
@@ -976,6 +981,115 @@ int seedkeeper_reset_secret(kern_seedkeeper_t *sk, uint16_t id) {
   if (sw == SEEDKEEPER_SW_SECRET_NOT_FOUND)
     return 1;
   return SEEDKEEPER_ERR_STATUS;
+}
+
+/* --- generation -------------------------------------------------------- */
+
+/* Both generators answer with [ id(2b) | fingerprint(4b) ]. */
+static int seedkeeper_generated_id(const uint8_t *resp, size_t len,
+                                   uint16_t *id_out,
+                                   uint8_t fingerprint_out[4]) {
+  if (len < 6)
+    return SEEDKEEPER_ERR_PARSE;
+  if (id_out)
+    *id_out = (uint16_t)(((uint16_t)resp[0] << 8) | resp[1]);
+  if (fingerprint_out)
+    memcpy(fingerprint_out, resp + 2, SEEDKEEPER_FINGERPRINT_SIZE);
+  return SEEDKEEPER_OK;
+}
+
+int seedkeeper_generate_masterseed(kern_seedkeeper_t *sk, uint8_t seed_size,
+                                   const char *label, uint8_t export_rights,
+                                   uint16_t *id_out,
+                                   uint8_t fingerprint_out[SEEDKEEPER_FINGERPRINT_SIZE]) {
+  uint8_t data[1 + SEEDKEEPER_MAX_LABEL];
+  uint8_t resp[8];
+  size_t label_len;
+  size_t len = sizeof(resp);
+  int rc;
+
+  if (!sk)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  if (seed_size < 16 || seed_size > 64)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  label = label ? label : "";
+  label_len = strlen(label);
+  if (label_len > SEEDKEEPER_MAX_LABEL)
+    return SEEDKEEPER_ERR_ARGUMENT;
+
+  /* data: [ label_size(1b) | label ] */
+  data[0] = (uint8_t)label_len;
+  memcpy(data + 1, label, label_len);
+
+  rc = seedkeeper_command_ok(sk, SEEDKEEPER_INS_GENERATE_MASTERSEED, seed_size,
+                              export_rights, data, label_len + 1, resp, &len);
+  if (rc != SEEDKEEPER_OK)
+    return rc;
+  return seedkeeper_generated_id(resp, len, id_out, fingerprint_out);
+}
+
+int seedkeeper_generate_random_secret(kern_seedkeeper_t *sk,
+                                      uint8_t secret_size, const char *label,
+                                      uint8_t export_rights, uint8_t type,
+                                      uint8_t subtype,
+                                      const uint8_t *external_entropy,
+                                      size_t external_entropy_len,
+                                      int save_entropy, uint16_t *id_out,
+                                      uint8_t fingerprint_out[SEEDKEEPER_FINGERPRINT_SIZE]) {
+  uint8_t data[4 + SEEDKEEPER_MAX_LABEL + 1 + 64];
+  uint8_t resp[8];
+  size_t label_len;
+  size_t offset;
+  size_t len = sizeof(resp);
+  int rc;
+
+  if (!sk)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  if (secret_size < 16 || secret_size > 64)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  if (external_entropy_len > secret_size)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  label = label ? label : "";
+  label_len = strlen(label);
+  if (label_len > SEEDKEEPER_MAX_LABEL)
+    return SEEDKEEPER_ERR_ARGUMENT;
+
+  /* data: [ type(1b) | subtype(1b) | flag_save_entropy(1b) |
+   *         label_size(1b) | label | entropy_size(1b) | entropy ] */
+  data[0] = type;
+  data[1] = subtype;
+  data[2] = save_entropy ? 0x01 : 0x00;
+  data[3] = (uint8_t)label_len;
+  memcpy(data + 4, label, label_len);
+  offset = 4 + label_len;
+  data[offset++] = (uint8_t)external_entropy_len;
+  if (external_entropy_len) {
+    memcpy(data + offset, external_entropy, external_entropy_len);
+    offset += external_entropy_len;
+  }
+
+  rc = seedkeeper_command_ok(sk, SEEDKEEPER_INS_GENERATE_RANDOM_SECRET,
+                              secret_size, export_rights, data, offset, resp,
+                              &len);
+  if (rc != SEEDKEEPER_OK)
+    return rc;
+  return seedkeeper_generated_id(resp, len, id_out, fingerprint_out);
+}
+
+int seedkeeper_plain_secret_bytes(const uint8_t *secret, size_t secret_len,
+                                   uint8_t *out, size_t cap, size_t *out_len) {
+  size_t n;
+
+  if (!secret || !out || !out_len || secret_len < 1)
+    return SEEDKEEPER_ERR_ARGUMENT;
+  n = secret[0];
+  if (n == 0 || n > secret_len - 1)
+    return SEEDKEEPER_ERR_PARSE;
+  if (n > cap)
+    return SEEDKEEPER_ERR_SPACE;
+  memcpy(out, secret + 1, n);
+  *out_len = n;
+  return SEEDKEEPER_OK;
 }
 
 /* --- BIP-39 Masterseed payload ----------------------------------------- */

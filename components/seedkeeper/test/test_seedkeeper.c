@@ -459,6 +459,98 @@ static void test_bip39(void) {
         SEEDKEEPER_ERR_PARSE);
 }
 
+static void test_generate(void) {
+  mock_t m;
+  kern_seedkeeper_t sk;
+  uint8_t resp[6] = {0x00, 0x2A, 0xAA, 0xBB, 0xCC, 0xDD};
+  uint16_t id = 0;
+  uint8_t fp[SEEDKEEPER_FINGERPRINT_SIZE];
+
+  /* INS A0: P1 is the seed size, P2 the export rights, the data is the
+   * label. */
+  mock_reset(&m);
+  seedkeeper_init(&sk, (kern_nfc_transport_t){mock_transmit}, &m);
+  mock_data(&m, resp, sizeof(resp), 0x9000);
+  CHECK(seedkeeper_generate_masterseed(&sk, 32, "kern",
+                                       SEEDKEEPER_EXPORT_PLAINTEXT_ALLOWED,
+                                       &id, fp) == 0);
+  CHECK(id == 0x002A);
+  CHECK(fp[0] == 0xAA && fp[3] == 0xDD);
+  CHECK(m.apdu_count == 1);
+  CHECK(m.apdu[0][0] == SEEDKEEPER_CLA);
+  CHECK(m.apdu[0][1] == SEEDKEEPER_INS_GENERATE_MASTERSEED);
+  CHECK(m.apdu[0][2] == 32);
+  CHECK(m.apdu[0][3] == SEEDKEEPER_EXPORT_PLAINTEXT_ALLOWED);
+  CHECK(m.apdu[0][4] == 5);
+  CHECK(m.apdu[0][5] == 4);
+  CHECK(memcmp(m.apdu[0] + 6, "kern", 4) == 0);
+
+  /* The applet only accepts 16 to 64 bytes. */
+  mock_reset(&m);
+  seedkeeper_init(&sk, (kern_nfc_transport_t){mock_transmit}, &m);
+  CHECK(seedkeeper_generate_masterseed(&sk, 8, "kern", 0x01, &id, fp) ==
+        SEEDKEEPER_ERR_ARGUMENT);
+  CHECK(seedkeeper_generate_masterseed(&sk, 65, "kern", 0x01, &id, fp) ==
+        SEEDKEEPER_ERR_ARGUMENT);
+
+  /* INS A3: the data carries the type, the subtype, the save-entropy
+   * flag, the label and the external entropy. */
+  mock_reset(&m);
+  seedkeeper_init(&sk, (kern_nfc_transport_t){mock_transmit}, &m);
+  mock_data(&m, resp, sizeof(resp), 0x9000);
+  CHECK(seedkeeper_generate_random_secret(
+            &sk, 32, "kern", SEEDKEEPER_EXPORT_PLAINTEXT_ALLOWED,
+            SEEDKEEPER_TYPE_MASTERSEED, SEEDKEEPER_SUBTYPE_BIP39,
+            (const uint8_t *)"ab", 2, 1, &id, fp) == 0);
+  CHECK(id == 0x002A);
+  CHECK(m.apdu[0][1] == SEEDKEEPER_INS_GENERATE_RANDOM_SECRET);
+  CHECK(m.apdu[0][2] == 32);
+  CHECK(m.apdu[0][3] == SEEDKEEPER_EXPORT_PLAINTEXT_ALLOWED);
+  /* type, subtype, save entropy, label size, label, entropy size, entropy */
+  CHECK(m.apdu[0][4] == 4 + 4 + 1 + 2);
+  CHECK(m.apdu[0][5] == SEEDKEEPER_TYPE_MASTERSEED);
+  CHECK(m.apdu[0][6] == SEEDKEEPER_SUBTYPE_BIP39);
+  CHECK(m.apdu[0][7] == 0x01);
+  CHECK(m.apdu[0][8] == 4);
+  CHECK(memcmp(m.apdu[0] + 9, "kern", 4) == 0);
+  CHECK(m.apdu[0][13] == 2);
+  CHECK(memcmp(m.apdu[0] + 14, "ab", 2) == 0);
+
+  /* More external entropy than the secret holds is refused. */
+  mock_reset(&m);
+  seedkeeper_init(&sk, (kern_nfc_transport_t){mock_transmit}, &m);
+  CHECK(seedkeeper_generate_random_secret(
+            &sk, 16, "kern", 0x01, SEEDKEEPER_TYPE_MASTERSEED, 0,
+            (const uint8_t *)"abcdefghijklmnopqrst", 20, 0, &id, fp) ==
+        SEEDKEEPER_ERR_ARGUMENT);
+}
+
+static void test_plain_secret(void) {
+  uint8_t secret[40];
+  uint8_t bytes[40];
+  size_t len = 0;
+
+  memset(secret, 0, sizeof(secret));
+  secret[0] = 32;
+  for (size_t i = 0; i < 32; i++)
+    secret[1 + i] = (uint8_t)i;
+
+  CHECK(seedkeeper_plain_secret_bytes(secret, sizeof(secret), bytes,
+                                      sizeof(bytes), &len) == 0);
+  CHECK(len == 32);
+  CHECK(bytes[0] == 0 && bytes[31] == 31);
+
+  /* A size byte that does not fit the secret is a parse error. */
+  secret[0] = 200;
+  CHECK(seedkeeper_plain_secret_bytes(secret, sizeof(secret), bytes,
+                                      sizeof(bytes), &len) ==
+        SEEDKEEPER_ERR_PARSE);
+
+  secret[0] = 32;
+  CHECK(seedkeeper_plain_secret_bytes(secret, sizeof(secret), bytes, 8,
+                                      &len) == SEEDKEEPER_ERR_SPACE);
+}
+
 static void test_errors(void) {
   mock_t m;
   kern_seedkeeper_t sk;
@@ -497,6 +589,8 @@ int main(void) {
   test_export();
   test_reset();
   test_bip39();
+  test_generate();
+  test_plain_secret();
   test_errors();
 
   if (failures) {

@@ -10,11 +10,10 @@
  * SeedKeeper / Satochip applet layer.
  *
  * The transport is the NFC component: select the applet, verify the PIN,
- * then import or export secrets.  Only the plaintext flows (P1=0x01) are
- * implemented, matching krux/src/krux/seedkeeper.py; they are what
- * SeedSigner writes and reads, so cards interoperate.  The secure channel
- * (P1=0x02, INS 0x81/0x82) needs the card's ECDSA key and AES/HMAC and is
- * deliberately out of scope here.
+ * then import or export secrets.  The plaintext flows (P1=0x01) are the
+ * ones the SeedSigner app writes and reads, so cards interoperate.  A card
+ * that reports needs_secure_channel wraps every command in the applet's
+ * secure channel (INS 0x81/0x82), which this layer does transparently.
  *
  * All functions return 0 on success, a negative SEEDKEEPER_ERR_* on a host
  * side failure, or SEEDKEEPER_ERR_STATUS when the card answered a status
@@ -152,6 +151,32 @@ int seedkeeper_import_secret(kern_seedkeeper_t *sk, uint8_t type,
 /* Export one secret.  *out_len is capacity in and payload length out. */
 int seedkeeper_export_secret(kern_seedkeeper_t *sk, uint16_t id, uint8_t *out,
                              size_t *out_len);
+
+/* Generate a random Masterseed on the card (INS A0).  The card keeps it as a
+ * plain [size | bytes] secret, so export it to learn the bytes; the label
+ * says which secret it is.  seed_size is 16 to 64. */
+int seedkeeper_generate_masterseed(kern_seedkeeper_t *sk, uint8_t seed_size,
+                                   const char *label, uint8_t export_rights,
+                                   uint16_t *id_out,
+                                   uint8_t fingerprint_out[SEEDKEEPER_FINGERPRINT_SIZE]);
+
+/* Generate a random secret on the card (INS A3).  secret_size is 16 to 64.
+ * external_entropy may be NULL; the card mixes it with its own randomness.
+ * save_entropy asks the card to keep a proof that the external entropy was
+ * used, which is how the SeedKeeper app proves a seed came from the phone. */
+int seedkeeper_generate_random_secret(kern_seedkeeper_t *sk,
+                                      uint8_t secret_size, const char *label,
+                                      uint8_t export_rights, uint8_t type,
+                                      uint8_t subtype,
+                                      const uint8_t *external_entropy,
+                                      size_t external_entropy_len,
+                                      int save_entropy, uint16_t *id_out,
+                                      uint8_t fingerprint_out[SEEDKEEPER_FINGERPRINT_SIZE]);
+
+/* The bytes of a plain [size | bytes] secret, the form the card uses for a
+ * generated secret. */
+int seedkeeper_plain_secret_bytes(const uint8_t *secret, size_t secret_len,
+                                   uint8_t *out, size_t cap, size_t *out_len);
 
 /* Free one secret.  Returns 1 when it did not exist. */
 int seedkeeper_reset_secret(kern_seedkeeper_t *sk, uint16_t id);
