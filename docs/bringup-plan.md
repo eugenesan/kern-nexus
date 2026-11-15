@@ -78,17 +78,20 @@ dmesg | grep -E 'CPP FW Version|Invalid frame|msm_cpp'
 kern's scan page shows a preview and decodes a QR; the entropy page
 captures frames.  No stripes; stream restarts only at the menu.
 
-## Phase 3 — unified sighash in libwally
+## Phase 3 — unified sighash in kern
 
-1. Add `wally_tx_get_unified_signature_hash()` and the PSBT wrapper to the
-   libwally fork.
-2. Derive the script type from scripts, not PSBT fields.
-3. Implement the cache/validation invariants from `docs/bitcoin.md`.
-4. Port the embit vectors and negotiation tests into a C test binary.
-5. Wire kern's PSBT review to display `Unified 0x21` / `Standard 0x01`.
+1. Keep the digest in `kern/main/core/unified_sighash.c` and the 166-vector
+   test in `tools/sighash`; do not fork libwally.
+2. Sign ECDSA and taproot (key path and script path) with libwally's EC
+   primitives, then insert the partial signatures into the PSBT maps.
+3. Accept `UNIFIED|ALL` (`0x21`) in the gate and label it on the review
+   screen; refuse mixed/partial requests.
+4. Require an amount for every input, because the digest commits to all of
+   them.
 
-**Exit:** byte-for-byte digest parity for every vector; standard PSBT tests
-unchanged; a `0x21` PSBT signs and verifies on the host.
+**Exit:** all 166 digest vectors and the P2WPKH/BIP86 signing tests pass;
+standard PSBT tests are unchanged.
+
 
 ## Phase 4 — NFC transport and SeedKeeper
 
@@ -97,11 +100,14 @@ unchanged; a `0x21` PSBT signs and verifies on the host.
    and timeouts; implement ISO-DEP APDU transceive.
 3. Test with no card (chip answers), then a tag, then a card.
 4. Port SeedKeeper plaintext flows (`seedkeeper.py`): SELECT, PIN,
-   status, headers, import/export, chunking.
+   status, headers, import/export, chunking.  **Done** in
+   `components/seedkeeper` with 118 mock-APDU checks.
 5. Optional secure channel (`seedkeeper_sc.py`): secp256k1 ECDH,
    HMAC-SHA1, AES-128-CBC, card signature recovery.
-6. Wire seed loading and PSBT signing on-card (Satochip/TapSigner) through
-   the unified digest when `0x20` is active.
+6. Wire seed loading: the Load Mnemonic menu now has "From SeedKeeper";
+   bring-up/PIN/list/export run on the worker task, and key confirmation
+   asks for a passphrase when the secret did not carry one.  **No-card
+   path is implemented; a real tag is still untested.**
 
 **Exit:** status/PIN/import/export round-trip against a real SeedKeeper;
 wrong PIN/blocked/no-applet paths produce the documented status words;

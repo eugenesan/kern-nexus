@@ -320,9 +320,12 @@ These need an explicit answer before the affected work is final:
 10. **Secure boot / signing** — kern's ESP32 secure boot does not apply.
     Decide whether the Linux binary gets any signature/verification at all
     (the kernel/bootloader path does not verify it in this design).
-11. **XBT / BLAKE2b** — `components/xbt` now has BLAKE2b, the 164-byte v2
-    header and PoW with the five official vectors.  Remaining: activation
-    height/network constants, chain selection and PSBT marking.
+11. **XBT / BLAKE2b** — `components/xbt` has BLAKE2b, the 164-byte v2
+    header and PoW with the five official vectors, but it is not linked
+    into kern.  A signer only needs the `0x20` sighash bit; chain
+    selection and block validation are coordinator/node work.  Remaining:
+    activation height/network constants if a chain selector is ever
+    required.
 
 ## 12. Prompt for the coding agent
 
