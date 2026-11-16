@@ -9,15 +9,18 @@ This is the C counterpart of [`krux-nexus`](../krux-nexus).  It uses the
 same TWRP recovery template, the same kernel tree and the same hardware
 contract, but the payload is kern instead of Krux + MicroPython.
 
-**Status (2026-11-14):** the static ARM kern binary builds and runs on the
-Nexus 5.  The UI draws on the panel, touch works, and the camera daemon
-starts and publishes frames through the bridge.  Next are QR decode,
-NFC/SeedKeeper and the XBT block rules; see
-[docs/bringup-plan.md](docs/bringup-plan.md).
+**Status (2026-11-15):** the static ARM binary runs on the Nexus 5 with
+working display/touch, QR scanning and camera entropy (AE/AF and manual
+controls), NFC SeedKeeper (load, new seed, backup, list, properties,
+delete, card info, free space, secure channel), and the unified opt-in
+sighash in kern's PSBT path.  The camera is still an external `camd`
+process; remaining gaps and the next tasks are in
+[docs/status.md](docs/status.md).
 
-**Start here:** [docs/kern-nexus-blueprint.md](docs/kern-nexus-blueprint.md)
-is the overview and the coding-agent brief.  The index is
-[docs/README.md](docs/README.md).
+**Start here:** [docs/status.md](docs/status.md) for the current state,
+then [docs/kern-nexus-blueprint.md](docs/kern-nexus-blueprint.md) for the
+design.  A new coding session should begin with
+[docs/agent-bootstrap.md](docs/agent-bootstrap.md).
 
 > **Warning:** the upstream kern README says it is unaudited and intended
 > for research/testnet.  That applies here too.  This port is new and has
@@ -67,13 +70,17 @@ fastboot flash recovery /tmp/kern-nexus/artifacts/build/boot-kern-standard-relea
 ```
 kern/        upstream kern checkout (C, LVGL, libwally-core, ...)
 ports/       nexus5 CMake project and Linux/ARM platform layer
-components/  ported camera, NFC, SeedKeeper components
-rootfs/      init stub, ramdisk builder, boot-image packer
-scripts/     kernel/kern/image/deploy wrappers
-tools/       kernel patches/profiles, host serial helper, air-gap gate
+components/  ported camera, NFC, SeedKeeper components (+ unused xbt)
+rootfs/      init stub source, ramdisk builder, boot-image packer
+scripts/     kernel/kern/image/deploy wrappers (build-all, test, ...)
+tools/       kernel patches/profiles, sighash host test, serial, air-gap gate
 linux/       kernel tree (submodule, airgap/cam-xz-wipe)
 artifacts/   TWRP template; generated files go to /tmp (gitignored)
-docs/        the guide and detail documents
+docs/        status, bootstrap prompt, guide and detail documents
+
+Build products stay out of the checkout: the kern/camd binaries, the
+init stub, cUR's objects and the images are written under
+`/tmp/kern-nexus` (`KERN_NEXUS_BUILD`).
 ```
 
 ## Rules
@@ -101,6 +108,7 @@ and bring-up plan:
   libraries; the simulator fetches LVGL from the network);
 * the PIN/settings policy is `/data/kern` (resolved);
 * `k_run`/`k_next` are the kernel phases (resolved);
-* camera geometry (keep Krux 720×960/960×1280);
+* camera: external `camd` or in-process (see `docs/status.md` §5);
 * whether to keep the wired USB Ethernet driver in the threat model;
-* whether the Linux binary gets any signature/verification at all.
+* whether the Linux binary gets any signature/verification at all;
+* XBT activation height/network constants (blocked; do not invent).

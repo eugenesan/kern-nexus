@@ -134,17 +134,12 @@ they differ from `CAMERA_INPUT_WIDTH/HEIGHT`; do not force the sensor to
 800×800 unless a hard assert appears.  If a fixed 800×800 is ever needed,
 crop/scale in the port, not in the sensor path.
 
-**Format mismatch to fix in the port:** Krux's `camd` produces YUV420, but
-kern's `scanner.c` currently expects **RGB565** and uses the ESP32-P4 PPA to
-crop/scale/convert it to YUV420 for `k_quirc`.  The Nexus 5 has no PPA, so
-the port must either:
-
-* add a `KERN_NEXUS` path in `scanner.c` that takes the YUV420 frame,
-  crops/scales the Y plane on the CPU, and skips the PPA; or
-* convert YUV420→RGB565 on the CPU and keep the per-frame crop/scale in a
-  software `ppa_do_scale_rotate_mirror()`.
-
-The first is less work and avoids a needless colour round-trip.  The
+**Resolved.**  The Nexus 5 path publishes **Y8 960×1280**: the bridge
+(`ports/nexus5/platform/app_video_camera.c`) reads it from camd and the
+scanner crops/scales the Y plane on the CPU, skipping the PPA.  The
+preview is an `L8` LVGL image; the decoder gets the native frame.  The
+entropy page takes a 1:1 central 800×800 crop, flipped 180° to match the
+scanner, and shows it as `L8`.  Do not force the sensor to 800×800.  The
 callback is `app_video_frame_operation_cb_t(uint8_t *buf, uint8_t index,
 uint32_t w, uint32_t h, size_t len)`.
 
@@ -174,13 +169,24 @@ camd 1640 1232 0x40000000 rear 0 <fw> 2 binned cfg nocycle \
 See `camd.c:main()` for the full positional contract.  For kern, keep the
 same defaults and expose only what the UI uses:
 
-* `app_video_set_ae_target(level)` — P95 target; QR target 180, entropy 0x80;
+* `app_video_set_ae_target(level)` — P95 target.  The settings default is
+  **180** (`AE_TARGET_DEFAULT`); the scanner and the entropy page both use
+  the stored value.  An old stored `ae_tgt` of 80 makes the picture dark.
 * `app_video_set_focus(position)` — DW9714 position; 0..1023 (inverted in
-  the UI);
+  the UI); `app_video_refocus()` / `app_video_refocus_cached()` request a
+  full or cached sweep; `app_video_auto_focus()` releases a manual step;
+* `app_video_adjust_exposure(delta)` — the −/+ strip; holds the exposure a
+  few seconds and then gives control back;
 * `app_video_has_focus_motor()` / `app_video_has_ae_control()`;
 * `app_video_get_resolution()`, `app_video_get_buf_size()`;
-* `app_video_ppa_snap_crop()` — on the ESP this is the PPA; on Linux
-  implement the same exact integer crop (no hardware PPA).
+* `app_video_ppa_snap_crop()` — unused on this target (no PPA), kept for
+  the shared interface.
+
+The AE/AF controller lives in the bridge, not in camd: it seeds exposure,
+gain and luma from camd's cached sensor state (`q`), ignores the first
+three frames while the sensor settles, waits 800 ms after each change,
+requires two same-side measurements, locks a picture in the dead band and
+holds the exposure for a user-requested sweep.
 
 ### 5.4 Lifecycle and pitfalls
 
@@ -195,7 +201,15 @@ same defaults and expose only what the UI uses:
 * The camera thread must not call LVGL; deliver frames through the
   callback and lock only around the preview buffer.
 * The QR decoder is `k_quirc`; it wants a Y plane, not RGB.  The preview
-  can use the same YUV420 buffer through LVGL's canvas.
+  can use the same Y8 buffer as an `L8` image.
+* **A new frame client is never served a stale frame.**  camd publishes a
+  timestamp with each frame and only hands over one captured in the last
+  300 ms; otherwise it answers "no frame yet" and the page waits.  Without
+  this the scanner decoded the code that was in view before the page
+  opened, and the first frames showed the previous exposure.
+* Do not read sensor registers from the control thread while streaming:
+  the CCI bus is shared and the writes start failing (`ER`).  camd reads
+  them once at startup, before the stream, and caches exposure/gain.
 
 ## 6. NFC (BCM2079x)
 

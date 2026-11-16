@@ -4,7 +4,9 @@ Start with the blueprint; it is the overview and the coding-agent brief.
 
 | document | read it for |
 |---|---|
-| [kern-nexus-blueprint.md](kern-nexus-blueprint.md) | **start here**: target, architecture, boot modes, port layout, ordered work |
+| [status.md](status.md) | **read first**: what works today, known gaps, decisions, next tasks |
+| [agent-bootstrap.md](agent-bootstrap.md) | the prompt for a new session (rules, layout, device loop, first tasks) |
+| [kern-nexus-blueprint.md](kern-nexus-blueprint.md) | target, architecture, boot modes, port layout, ordered work |
 | [build-and-deploy.md](build-and-deploy.md) | toolchain, kernel/Kern builds, LVGL/mbedTLS, ramdisk/image, TWRP modes, flash/deploy |
 | [hardware.md](hardware.md) | measured nodes and wiring: display/input/power, camera, NFC, UART, air gap |
 | [bitcoin.md](bitcoin.md) | unified opt-in sighash (tagged SHA256; XBT BLAKE2b block/PoW), libwally port, SeedKeeper, parity |
@@ -26,8 +28,9 @@ Reference material lives in the sibling `../krux-nexus` tree:
 
 ## Verification assets
 
-* `tools/sighash/` — standalone unified-sighash implementation and the
-  166 embit vectors (`make -C tools/sighash`).
+* `tools/sighash/` — host vector test for the shipped digest
+  (`kern/main/core/unified_sighash.c`), 166 embit vectors
+  (`make -C tools/sighash`).
 * `tools/bringup/` — static placeholder and the boot-chain image recipe.
 * `tools/check-airgap.py` — kernel/ramdisk wireless gate.
 * `tools/serial-cmd.py` — host UART helper.

@@ -1,11 +1,13 @@
 # Bring-up plan and acceptance tests
 
-**Bootstrap status (2026-11-14):** the standalone unified-sighash reference
-passes all **166** embit vectors (`make -C tools/sighash`); the boot-chain
-bootstrap image runs; the real static ARM kern binary builds and draws on
-the Nexus 5 panel; touch works; and camd publishes 960×1280 frames through
-the bridge at 10 fps.  QR decode with an external code, NFC/SeedKeeper and
-the XBT block rules are next.
+**Status (2026-11-15):** everything through the SeedKeeper secure channel
+runs on hardware, and the unified sighash is wired into PSBT signing
+(166 vectors pass).  The camera is an external `camd` process with the
+AE/AF controller in the bridge; an in-process refactor is optional.  The
+open work is the userspace wipe of port buffers, hiding the SD/file
+entries, the sealed flash and wipe verification, and XBT constants.
+See [status.md](status.md) for the short version and the per-phase notes
+below for what is done.
 
 The order matters: each phase has an observable exit criterion.  Do not
 start the unified sighash on hardware before the C vectors pass; do not
@@ -53,20 +55,25 @@ ESP-IDF.
 **Exit:** kern's splash and PIN/login screen draw at the right size; touch
 and volume/power keys work; no stale TWRP image after a warm reset.
 
-## Phase 2 — camera and QR
+## Phase 2 — camera and QR  — **done (2026-11-15)**
+
+The camera is still a separate `camd` process, not a `kern` pthread; the
+bridge exposes the same `app_video_*` contract.  In-process is an optional
+future task (see `docs/status.md` §5).
 
 1. Copy `../krux-nexus/cam/camd.c` and headers/firmware into
-   `components/camera/`.
+   `components/camera/`.  **Done.**
 2. Refactor `main()` into `kern_camera_init/start/stop`; remove the socket
-   and the supervisor process.
-3. Make the frame path deliver the same YUV420 geometry Krux uses
-   (binned 720×960 default; 960×1280 full/PIX) to
-   `app_video_frame_operation_cb_t`, and add a `KERN_NEXUS` path in
-   `scanner.c` that crops/scales Y on the CPU instead of the P4 PPA.
-4. Implement the `app_video_*` functions and a software
-   `app_video_ppa_snap_crop` if needed.
-5. Bundle `cpp_firmware_v1_2_0.fw` next to the binary; stage it to
-   `/lib/firmware`; never self-copy/truncate.
+   and the supervisor process.  **Not done** (optional; the daemon works).
+3. Frame path: Y8 960×1280 from the sensor, CPU crop/scale of the Y plane
+   in `scanner.c` (no PPA), 1:1 crop and L8 image on the entropy page.
+   **Done.**  The AE/AF controller, tap-to-focus, the −/+ exposure strip,
+   the settings sliders, the fresh-frame gate and the sensor-seeded
+   exposure are in `ports/nexus5/platform/app_video_camera.c`.
+4. `app_video_*` functions implemented, including the ae target/focus
+   controls and the crop helper.  **Done.**
+5. `cpp_firmware_v1_2_0.fw` bundled in `/opt/kern` and staged to
+   `/lib/firmware`.  **Done.**
 
 **Exit:**
 
@@ -76,9 +83,10 @@ dmesg | grep -E 'CPP FW Version|Invalid frame|msm_cpp'
 ```
 
 kern's scan page shows a preview and decodes a QR; the entropy page
-captures frames.  No stripes; stream restarts only at the menu.
+captures frames.  No stripes; stream restarts only at the menu.  Verified
+on hardware, including a real QR and the entropy capture path.
 
-## Phase 3 — unified sighash in kern
+## Phase 3 — unified sighash in kern  — **done (2026-11-15)**
 
 1. Keep the digest in `kern/main/core/unified_sighash.c` and the 166-vector
    test in `tools/sighash`; do not fork libwally.
@@ -90,10 +98,11 @@ captures frames.  No stripes; stream restarts only at the menu.
    them.
 
 **Exit:** all 166 digest vectors and the P2WPKH/BIP86 signing tests pass;
-standard PSBT tests are unchanged.
+standard PSBT tests are unchanged.  Verified; the only remaining item is
+the XBT activation/network constants, which are blocked.
 
 
-## Phase 4 — NFC transport and SeedKeeper
+## Phase 4 — NFC transport and SeedKeeper  — **done (2026-11-15)**
 
 1. Port the BCM2079x ioctl transport to `components/nfc`.
 2. Port the NCI bring-up from `krux/src/nfc.py` with the same constants
@@ -104,16 +113,19 @@ standard PSBT tests are unchanged.
    `components/seedkeeper` with 118 mock-APDU checks.
 5. Optional secure channel (`seedkeeper_sc.py`): secp256k1 ECDH,
    HMAC-SHA1, AES-128-CBC, card signature recovery.
-6. Wire seed loading: the Load Mnemonic menu now has "From SeedKeeper";
-   bring-up/PIN/list/export run on the worker task, and key confirmation
-   asks for a passphrase when the secret did not carry one.  **No-card
-   path is implemented; a real tag is still untested.**
+6. Wire the flows: Load Mnemonic → From SeedKeeper, plus Settings →
+   SeedKeeper (new seed, backup, list, properties, delete, card info,
+   free space).  **Done and hardware-tested** (secure channel included).
+   The PIN is asked first; the backup collects label/passphrase and then
+   asks for the card; every write attempt re-selects and re-logs in;
+   `6E00`/`6D00` are treated as a lost session.
 
 **Exit:** status/PIN/import/export round-trip against a real SeedKeeper;
 wrong PIN/blocked/no-applet paths produce the documented status words;
-reconnect mid-walk is safe.
+reconnect mid-walk is safe.  Round-trip verified; the wrong-PIN/blocked
+matrix still needs a written test pass.
 
-## Phase 5 — storage, power and wipe
+## Phase 5 — storage, power and wipe  — **mostly done**
 
 1. Map NVS/SPIFFS/SD shims to `/data/kern/nvs`, `/data/kern/flash`,
    `/data/kern/sd` as Krux does; hide SD/file menus.
@@ -126,7 +138,12 @@ reconnect mid-walk is safe.
 secrets are written; a power-off wipes ~1488 MB of free RAM and powers off;
 the next boot does not re-wipe.
 
-## Phase 6 — TWRP image, modes and seal
+Status: settings/PIN and the kernel wipe are done; **userspace scrubbing of
+the port buffers (NFC APDUs, SeedKeeper keys/PIN, camera frames,
+framebuffer) is not** — the kernel does not cover reserved memory.  The
+power-off trace still needs a serial-console pass.
+
+## Phase 6 — TWRP image, modes and seal  — **done, final flash pending**
 
 1. Build the init stub for kern (start kern/TWRP, no Python/camd).
 2. Pack the TWRP ramdisk with:
@@ -135,7 +152,7 @@ the next boot does not re-wipe.
    * `/sbin/kern-init`, `/sbin/start-kern`, `/sbin/start-adb`,
      `/sbin/start-serial`;
    * `/system/bin/sh -> /sbin/sh`;
-   * `/opt/kern/kern-nexus`, camera firmware;
+   * `/opt/kern/kern-nexus`, `/opt/kern/camd`, camera firmware;
    * sealed `adbd.off`.
 
 3. Standard image: TWRP by default, Vol+ / `start-kern` runs kern.
@@ -147,6 +164,8 @@ the next boot does not re-wipe.
 
 **Exit:** TWRP boots with adb off; Vol+ and `start-kern` start kern only
 (no parallel TWRP); `start-adb` and `start-serial` work; sideload works.
+Images build and pass the checks; the sealed flash to `recovery` and the
+wipe verification are still pending.
 
 ## Phase 7 — release gates
 
@@ -161,6 +180,16 @@ the next boot does not re-wipe.
 * Image size < 23,068,672 bytes; gzip; `zImage-dtb`.
 * Power-off trace: `wipe: marking RAM` → `restart reason = recovery` →
   `wipe: N MB wiped` → `wipe: powering off`.
+
+Status: the air-gap and image/static checks pass.  Still open: hide the
+SD/file menu entries, scrub the port buffers in userspace, and verify the
+power-off trace on the serial console with the sealed image.
+
+## Phase 8 — camera in-process (optional/future)
+
+Documented in `docs/status.md` §5 and the blueprint §6.  Same exit as
+Phase 2, with the daemon removed: one binary, no sockets, no per-frame
+copy; a restart path for the pipeline inside the process.
 
 ## Tests to bring over or write
 
@@ -183,8 +212,8 @@ the next boot does not re-wipe.
 2. PIN/settings persistence: **resolved** — use `/data/kern` as Krux.
 3. mbedTLS and LVGL offline vendoring; pin/tag them.
 4. libwally pin/tag for the unified patch.
-5. Camera geometry: Krux 720×960 / 960×1280 is kept; only crop/scale if a
-   hard scanner assert appears.
+5. Camera geometry: **resolved** — Y8 960×1280, CPU crop/scale (no PPA),
+   1:1 crop on the entropy page.  In-process camera is optional/future.
 6. Compile out or just hide SD/file/update menus?
 7. USB Ethernet (`CONFIG_USB_RTL8150`) in or out of the threat model?
 8. Any binary signature/verification at all?  The ESP secure boot does not

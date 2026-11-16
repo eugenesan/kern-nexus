@@ -130,6 +130,13 @@ carveouts).  If the threat model requires it, add a display/camera scrub to
 the shutdown path as a separate feature; it is not part of the current
 kernel wipe.
 
+**Current gap (2026-11-15):** the userspace half of that is not done in
+the port.  There is no `secure_memzero()` in `components/nfc`,
+`components/seedkeeper`, `components/camera` or `ports/`: PINs, SeedKeeper
+session keys and ECDH material, camera frames and the framebuffer are not
+scrubbed before power-off.  This is a release gate; see
+[status.md](status.md) §2 and §7.
+
 ## 5. Kernel build
 
 ```sh

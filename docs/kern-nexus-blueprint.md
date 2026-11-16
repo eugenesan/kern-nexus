@@ -1,14 +1,17 @@
 # kern-nexus — implementation guide and agent brief
 
-**Status:** working plan, 2026-11-14.  This document replaces the earlier
-`kern-nexus-blueprint.md` draft.  It is both the project overview and the
-starting prompt for a coding agent.  The standalone unified-sighash
-reference already passes all 166 embit vectors; the boot-chain bootstrap
-images are built (device verification pending).  Detailed material is
-split into:
+**Status:** working design, updated 2026-11-15.  The port runs on the
+device: display/touch, QR scanning and camera entropy (AE/AF, manual
+controls), NFC SeedKeeper (all six card features, secure channel) and the
+unified opt-in sighash in the PSBT path.  The camera is still an external
+`camd` process (see §6 and `docs/status.md` §5).  Read
+[status.md](status.md) for today's state and [agent-bootstrap.md](agent-bootstrap.md)
+for the session prompt.  Detailed material is split into:
 
 | document | contents |
 |---|---|
+| [status.md](status.md) | current state, known gaps, decisions, next tasks |
+| [agent-bootstrap.md](agent-bootstrap.md) | prompt and rules for a new coding session |
 | [build-and-deploy.md](build-and-deploy.md) | toolchain, kernel, kern build, ramdisk/image, TWRP modes, flash/deploy |
 | [hardware.md](hardware.md) | measured device nodes, display/input/power, camera, NFC wiring |
 | [bitcoin.md](bitcoin.md) | unified opt-in sighash (corrected), SeedKeeper, Krux parity |
@@ -56,6 +59,12 @@ kern-nexus/
 `ports/`, `components/` and `rootfs/` where possible; changes inside
 `kern/` must be small and maintainable as patches or a branch.
 
+Build products never land in the checkout: `KERN_NEXUS_BUILD`
+(`/tmp/kern-nexus`) holds the binaries, images, the init stub, cUR's
+objects (`BUILD=` override in its Makefile) and the host test binaries.
+`tools/sighash` is a host test for `kern/main/core/unified_sighash.c`, not
+a firmware component; `rootfs/stub` is boot glue, not a component.
+
 ## 3. Boot and delivery architecture
 
 The delivered image is written to the **recovery** partition
@@ -72,8 +81,9 @@ The image is TWRP 3.7.0's ramdisk plus:
 * a disabled `kern-firmware` service for `start-kern`;
 * `/sbin/start-kern`, `/sbin/start-adb`, `/sbin/start-serial`;
 * `/system/bin/sh -> /sbin/sh`, because TWRP's `system()` needs it;
-* the kern binary and its assets in `/opt/kern` (standard image), or the
-  development copy in `/data/kern` (development image);
+* the kern binary, `camd`, the CPP firmware and the assets in `/opt/kern`
+  (standard image), or the development copy in `/data/kern` (development
+  image);
 * the camera CPP firmware in `/lib/firmware`.
 
 TWRP's init remains PID 1, so mounts and USB come up normally.  The stub
@@ -109,7 +119,7 @@ with a different platform layer:
 |---|---|---|
 | display | LCD panel + LVGL port | LVGL `LV_USE_LINUX_FBDEV` on `/dev/graphics/fb0`, plus the MSM pan/commit path |
 | touch/keys | GT911/FT5x06 + GPIO | LVGL `LV_USE_EVDEV`; `/dev/input/event1` touch, `event2` keys |
-| camera | `esp_video` + PPA | `components/camera` (MSM V4L2/ION/CPP) as an internal pthread |
+| camera | `esp_video` + PPA | `components/camera` (MSM V4L2/ION/CPP) as a separate `camd` process; `app_video_*` bridge in `ports/nexus5` |
 | NFC | none | `components/nfc` (BCM2079x NCI/ISO-DEP/APDU) |
 | NVS/flash | ESP NVS/SPIFFS | `/data/kern/nvs`, `/data/kern/flash` (same policy as Krux) |
 | FreeRTOS | ESP-IDF | `pthread` shims (the simulator's `esp_idf_stubs`) |
@@ -151,9 +161,10 @@ implementation).  See [hardware.md](hardware.md) for the exact nodes and
 
 ## 6. Camera (details in hardware.md and components/camera)
 
-The camera is not a Python daemon.  It is a C component started as a
-**pthread** by the port layer and exposed through the `app_video_*`
-functions kern already calls:
+The camera is a C component, not a Python daemon.  Today it runs as a
+small static binary, `camd`, spawned by the port layer; the bridge in
+`ports/nexus5/platform/app_video_camera.c` reads Y8 frames from its socket
+and exposes the `app_video_*` functions kern already calls:
 
 ```c
 esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored);
@@ -163,22 +174,37 @@ bool app_video_is_ready(void);
 bool app_video_is_streaming(void);
 ```
 
-The camera keeps Krux's geometry (binned **720×960** default; **960×1280**
-full/PIX) and YUV420.  `scanner.c` currently expects RGB565 and uses the
-P4 PPA; the Nexus 5 has no PPA, so add a `KERN_NEXUS` path that crops/scales
-the Y plane on the CPU (or a software PPA shim).  Do not change the sensor
-geometry just to satisfy 800×800.
+The sensor runs the processed preview at Y8 **960×1280** (the binned
+1640×1232 mode).  The bridge hands that frame to kern unchanged: the
+scanner crops/scales the Y plane on the CPU and the preview is an `L8`
+image, because the Nexus 5 has no PPA.  Do not change the geometry just to
+satisfy 800×800 (the entropy page crops 800×800 from it 1:1).
 
 The source is `../krux-nexus/cam/camd.c` (4,758 lines) plus its headers and
-`cam/fw/cpp_firmware_v1_2_0.fw`.  Refactor `main()` into
-`kern_camera_init/start/stop`, remove the Unix socket and supervisor
-process, and keep the frame path.  The CPP firmware is 16 KB and must be
+`cam/fw/cpp_firmware_v1_2_0.fw`.  The CPP firmware is 16 KB and must be
 staged into `/lib/firmware`; never copy a file onto itself with `O_TRUNC`.
 The kernel loads it through `request_firmware`/the MSM CPP driver.
 
+**Current shape.**  `camd` is a static binary in `/opt/kern`, spawned at
+boot by `app_video_init_once`, serving frames request/response on
+`/data/kern/camd.sock` (one Y8 copy per frame), controls on
+`camd-ctl.sock`, plus a shared-memory publish for the supervisor.  The
+AE/AF controller is in the bridge, not in camd: it seeds the exposure
+from camd's cached sensor state, waits after each change, requires two
+same-side measurements, and holds the exposure for a user-requested
+sweep.  camd reports the sweep flag and applies exposure/gain/luma.
+
+**Optional/future: in-process.**  Refactor `main()` into
+`kern_camera_init/start/stop`, replace the socket frame service with an
+internal publish (ideally zero-copy into the scanner's pool), replace the
+control socket with direct calls, and keep the external daemon behind a
+build flag until validated.  Risks: losing fault isolation, fragile
+pipeline restart, blocking ioctls on the wrong thread, and losing the
+standalone logs.  Gains: one binary, no socket permissions, no per-frame
+copy.  Full analysis: [status.md](status.md#5-optionalfuture-camd-inside-the-kern-binary).
+
 Keep the stream continuous; long pauses and restarts while streaming are
-the fragile path.  Keep the AE/AF controls and the QR/entropy target
-semantics from camd.  See [hardware.md](hardware.md#camera).
+the fragile path.  See [hardware.md](hardware.md#camera).
 
 ## 7. NFC and SeedKeeper (details in hardware.md and bitcoin.md)
 
@@ -269,21 +295,29 @@ design, limits and recovery caveats: [kernel-and-wipe.md](kernel-and-wipe.md).
 missing), the phone bootloops in Android, not in this firmware.  Enter the
 bootloader (Volume Down + Power), select Recovery, or repair Android.
 
-## 10. Ordered work
+## 10. Ordered work (status 2026-11-15)
 
-1. **Make the port configure and link** with the simulator stubs, then
-   replace display/input with fbdev/evdev.  Exit: a static ARM binary that
-   draws kern's UI.
-2. **Integrate the camera pthread** and prove `k_quirc` decodes a QR.
-3. **Port the unified sighash into libwally** and pass all embit vectors.
-4. **Integrate NFC transport**, then SeedKeeper plaintext flows, then the
-   secure channel.
-5. **Storage and wipe**: settings/PIN in `/data/kern`, explicit zeroing of
-   secrets, kernel marker wipe (unchanged; build flags for dev).
-6. **TWRP ramdisk/image**, standard/sealed modes, start scripts and seal.
-7. **Hardening**: no radios, no SD menus, no update path, `security-check`.
+1. **Port configure/link, display/input** — done.
+2. **Camera and QR** — done in the external-daemon shape: Y8 path, AE/AF,
+   tap-to-focus, manual exposure, entropy page, fresh-frame gate.  An
+   in-process refactor is optional/future (see §6).
+3. **Unified sighash** — done in kern (`kern/main/core`, PSBT signing,
+   `UNIFIED\|ALL` gate), 166 vectors pass.  XBT activation constants
+   remain blocked; libwally is untouched.
+4. **NFC and SeedKeeper** — done, hardware-tested: transport, plaintext
+   flows, secure channel, six card features, deferred card open and
+   per-attempt login.
+5. **Storage and wipe** — settings/PIN in `/data/kern` and the kernel
+   marker wipe are done; userspace scrubbing of the port buffers is still
+   pending (release gate).
+6. **TWRP ramdisk/image** — done and built; standard/audit images pass
+   `check-airgap` and `security-check`.  Final sealed flash and wipe
+   verification on serial remain.
+7. **Hardening** — radios/update path are out; the SD/file entries are
+   still reachable and must be hidden.
 
-Exit criteria and test commands: [bringup-plan.md](bringup-plan.md).
+Exit criteria and test commands: [bringup-plan.md](bringup-plan.md) and
+the current gaps in [status.md](status.md).
 
 ## 11. Open decisions / things missing from the first draft
 
@@ -309,8 +343,11 @@ These need an explicit answer before the affected work is final:
 6. **KernelSU** — the Krux kernel branch contains KernelSU.  kern-nexus does
    not need it (TWRP/kern run as root).  The patch series excludes it; do
    not enable it unless there is a reason.
-7. **Camera format — resolved:** keep Krux's 720×960 / 960×1280 YUV420;
-   scale/crop only if a hard scanner assert appears.
+7. **Camera format — resolved:** the Nexus 5 path uses Y8 960×1280; the
+   scanner crops/scales the Y plane on the CPU (no PPA), the entropy page
+   takes a 1:1 central crop.  Keep Krux's geometry; do not force 800×800.
+   AE/AF live in the bridge; the exposure is seeded from camd's cached
+   sensor state; the brightness target default is 180.
 8. **Storage menus** — the blueprint says disable SD/file menus.  They are
    still compiled into kern; either compile them out or make the storage
    shim return "unavailable" and hide the menu entries.
@@ -320,7 +357,15 @@ These need an explicit answer before the affected work is final:
 10. **Secure boot / signing** — kern's ESP32 secure boot does not apply.
     Decide whether the Linux binary gets any signature/verification at all
     (the kernel/bootloader path does not verify it in this design).
-11. **XBT / BLAKE2b** — `components/xbt` has BLAKE2b, the 164-byte v2
+11. **Camera process — open:** `camd` is a separate binary with sockets
+    (current, working).  Folding it into the kern binary is an optional
+    future task; the plan and risks are in
+    [status.md](status.md#5-optionalfuture-camd-inside-the-kern-binary).
+12. **SeedKeeper UX — resolved:** ask the PIN, collect label/passphrase,
+    then ask for the card; every write attempt re-selects and re-logs in;
+    `6E00`/`6D00` are a lost session.  The card page runs a flow cleanup
+    before deleting its screen.
+13. **XBT / BLAKE2b** — `components/xbt` has BLAKE2b, the 164-byte v2
     header and PoW with the five official vectors, but it is not linked
     into kern.  A signer only needs the `0x20` sighash bit; chain
     selection and block validation are coordinator/node work.  Remaining:
@@ -328,6 +373,9 @@ These need an explicit answer before the affected work is final:
     required.
 
 ## 12. Prompt for the coding agent
+
+The current prompt is [agent-bootstrap.md](agent-bootstrap.md).  The text
+below is the original day-0 brief, kept for the design intent.
 
 > Work in `kern-nexus`.  The target is the LG Nexus 5 (`hammerhead`,
 > MSM8974), Linux 3.4, ARMv7 hard-float, single static binary.  `kern/` is

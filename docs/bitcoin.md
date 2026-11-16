@@ -280,10 +280,13 @@ into deleted LVGL objects.
 | Load Mnemonic → From SeedKeeper | load | exports a BIP39 Masterseed, checks it against the seed the card stored, then asks for a passphrase only when the secret did not carry one |
 | New Mnemonic → From SeedKeeper | new seed | the card generates 32 random bytes (`INS 0xA0`), the device turns them into a 24-word mnemonic and the card keeps the BIP39 Masterseed of it |
 | Back Up → To SeedKeeper | backup | stores the loaded wallet on the card as a BIP39 Masterseed, under a label the user gives |
-| Home → SeedKeeper | list | every secret on the card: id, label and type |
-| Home → SeedKeeper | delete | picks a secret and frees it (`INS 0xA5`) after a confirmation |
-| Home → SeedKeeper | card info | applet and protocol version, secure channel, setup state, PIN tries left |
-| Home → SeedKeeper | free space | free, used and total card memory |
+| Settings → SeedKeeper | list | every secret on the card as a menu; selecting one shows its properties (id, type, subtype, label, export rights, plain/secure export counts, fingerprint) |
+| Settings → SeedKeeper | delete | picks a secret and frees it (`INS 0xA5`) after a confirmation; the list is re-read afterwards, and a lost link counts as "already gone" |
+| Settings → SeedKeeper | card info | applet and protocol version, secure channel, setup state, PIN tries left |
+| Settings → SeedKeeper | free space | free, used and total card memory |
+
+The hub is under **Settings**, not the Home menu, so it is reachable from
+the login screen and independent of the app state.
 
 Two rules the flows keep:
 
@@ -297,6 +300,20 @@ Two rules the flows keep:
   key's.  A wrong passphrase fails instead of quietly writing a different
   wallet to the card.
 
+Two process rules the port learned on hardware:
+
+* **Ask for the card when the write is ready.**  The backup collects the
+  label and the passphrase *first*, then asks for the card (the page
+  supports a deferred open).  A session opened before the user types is
+  gone by the time the write runs, and a command sent into it lands on
+  the card manager (`6E00`, class not supported).
+* **Every write attempt starts from a fresh select and PIN.**  That
+  includes Retry: the card may have left the field, been re-tapped or
+  restarted, and neither the selection nor the secure channel survives
+  that.  `6E00`/`6D00` are treated as a lost session wherever a retry is
+  safe.  A write whose response is lost can leave a second copy on the
+  card; delete the duplicate by label.
+
 The applet's own rules that the port follows: a generated secret is kept
 as a plain `[size | bytes]` blob, an imported secret is padded by the card
 to a multiple of 16 bytes, the fingerprint is the first four bytes of the
@@ -305,7 +322,9 @@ card's ECDSA signature to the last chunk.
 
 ### 2.3 Secure channel port
 
-If kern must read secure-channel secrets:
+**Implemented and in use.**  The applet v0.1 refuses everything but
+SELECT/GET_STATUS/0x81/0x82 once `needs_secure_channel` is set, so every
+flow (PIN included) runs through it.  The port:
 
 * ephemeral secp256k1 key pair;
 * ECDH shared X;
@@ -317,7 +336,10 @@ If kern must read secure-channel secrets:
 * envelope `PROCESS_SECURE_CHANNEL`.
 
 libwally-core has secp256k1 ECDH/recover; mbedTLS has AES-CBC/HMAC-SHA1.
-Keep the same byte layout as `seedkeeper_sc.py`.
+Keep the same byte layout as `seedkeeper_sc.py`.  Init takes seconds on
+the card (ECDH + two ECDSA signatures), so the port gives it a long APDU
+budget and retries with an RF re-activation and a re-select between
+attempts; a lost 0x81 may still have initialised the applet.
 
 ### 2.4 Test plan
 

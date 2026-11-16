@@ -148,6 +148,21 @@ The CMake target compiles:
 
 It links `mbedtls`, `mbedcrypto`, `mbedx509`, `z`, `pthread`, `m`.
 
+`scripts/build-camd.sh` builds the camera daemon (`components/camera/camd.c`)
+as a second static binary; `build-image.sh` bundles it as
+`/opt/kern/camd` next to kern and the CPP firmware.  `build-all.sh` runs
+kernel, mbedTLS, zlib, kern, camd, the host tests and both images in
+order, which is the way to prove the tree still builds from scratch.
+
+Host tests (no device): `bash scripts/test.sh` (sighash vectors, the
+SeedKeeper library and applet-emulator flows, cUR, QR/k_quirc and kern's
+core/QR suites).  cUR's Makefile builds in its source tree, so its suite
+is run from a copy:
+
+```sh
+bash scripts/build-cur-tests.sh     # copy in /tmp, objects never in the checkout
+```
+
 Expected output: ELF 32-bit ARM, statically linked, no `NEEDED` entries.
 Check with:
 
@@ -163,8 +178,9 @@ bash scripts/build-image.sh            # standard + sealed, gzip
 KERN_SEAL=0 bash scripts/build-image.sh  # audit (adb on)
 ```
 
-The script builds the init stub, packs the TWRP ramdisk, installs kern and
-the CPP firmware, and then makes the boot image:
+The script builds the init stub (into `/tmp/kern-nexus`, not
+`rootfs/stub/`), packs the TWRP ramdisk, installs kern, camd and the CPP
+firmware, and then makes the boot image:
 
 ```
 /tmp/kern-nexus/artifacts/build/ramdisk-kern
@@ -236,6 +252,28 @@ bash scripts/deploy.sh dev
 `scripts/deploy.sh fastboot` uploads a boot image and `fastboot boot`s it.
 `scripts/deploy.sh recovery` flashes a sealed image to recovery (explicit
 confirmation required).
+
+The manual loop used while working on the camera or SeedKeeper, when the
+image on the device is already current:
+
+```sh
+adb push /tmp/kern-nexus/artifacts/build/kern-nexus /opt/kern/kern-nexus
+adb push /tmp/kern-nexus/artifacts/build/camd /opt/kern/camd
+adb shell 'chmod 755 /opt/kern/kern-nexus /opt/kern/camd;
+           kill -9 $(pidof kern-nexus); kill -9 $(pidof camd);
+           rm -f /data/kern/camd.sock /data/kern/camd-ctl.sock;
+           /sbin/start-kern'
+```
+
+`kern-nexus` spawns `camd` at boot if it is not already running; killing
+both and removing the sockets avoids reusing a stale daemon.  When
+reusing a running camd, its sensor state (exposure, focus) is reused too.
+
+The camera control socket is `/data/kern/camd-ctl.sock` (mode 0600):
+`E` exposure+gain (4 bytes), `G` digital luma gain, `V` VMAX, `F` manual
+focus step, `A` release manual focus, `R`/`r` full/cached refocus, `q`
+snapshot (exposure, gain, luma).  `q` is what the bridge uses to start
+each preview from the sensor's current state.
 
 ## 8. Boot-chain bootstrap
 
