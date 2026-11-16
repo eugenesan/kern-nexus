@@ -65,6 +65,11 @@ static int s_started;
 #define AE_TOLERANCE 12
 #define AE_CLIP_PCT 3
 #define AE_VTS 0x09D6
+/* A manual exposure nudge holds the auto-exposure for about five seconds
+ * (the camera runs at roughly ten frames a second), then the camera takes
+ * over again: a picture the user corrected in one scene must not stay
+ * corrected in the next. */
+#define AE_MANUAL_FRAMES 50
 
 static int ae_exp = AE_EXP_DEFAULT;
 static int ae_gain = AE_GAIN_DEFAULT;
@@ -72,6 +77,7 @@ static int ae_luma = AE_LUMA_MIN;
 static int ae_luma_applied = AE_LUMA_MIN;
 static int ae_target = AE_TARGET_DEFAULT;
 static int ae_manual;
+static int ae_manual_hold;
 
 /* Opens the control socket and sends one command.  `cmd` holds the
  * command byte and its arguments. */
@@ -156,9 +162,10 @@ static int camd_ctl_set_focus(int step) {
 }
 
 /* A fresh autofocus sweep, the way every phone camera focuses on what is
- * tapped. */
-static int camd_ctl_refocus(void) {
-  unsigned char cmd[1] = {'R'};
+ * tapped.  `full` searches the whole range; otherwise the sweep refines
+ * the last good step, which is fast enough to repeat while aiming. */
+static int camd_ctl_refocus(int full) {
+  unsigned char cmd[1] = {(unsigned char)(full ? 'R' : 'r')};
   char reply[2] = {0};
 
   if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
@@ -233,7 +240,14 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
   int error, factor;
   int step_up, step_down;
 
-  if (ae_manual || sweeping)
+  if (ae_manual) {
+    if (--ae_manual_hold > 0)
+      return;
+    /* The nudge has held for a few seconds; the camera takes over
+     * again, so the next scene is exposed correctly. */
+    ae_manual = 0;
+  }
+  if (sweeping)
     return;
   level = ae_level(y, len, &clipped_pct);
   if (level < 0)
@@ -317,6 +331,7 @@ static void ae_start(void) {
   ae_luma = AE_LUMA_MIN;
   ae_luma_applied = AE_LUMA_MIN;
   ae_manual = 0;
+  ae_manual_hold = 0;
   /* The exposure can only reach the length of a frame, so the frame is
    * raised to the vendor's 2518 lines before the exposure goes there. */
   (void)camd_ctl_set_vts(AE_VTS);
@@ -539,21 +554,37 @@ esp_err_t app_video_set_focus(uint32_t position) {
 }
 
 esp_err_t app_video_refocus(void) {
-  return camd_ctl_refocus() == 0 ? ESP_OK : ESP_FAIL;
+  return camd_ctl_refocus(1) == 0 ? ESP_OK : ESP_FAIL;
+}
+
+/* The same, but a quick refinement of the last good focus step: what a
+ * page asks for when its preview starts. */
+esp_err_t app_video_refocus_cached(void) {
+  return camd_ctl_refocus(0) == 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t app_video_adjust_exposure(int32_t delta) {
-  /* A manual nudge holds the auto-exposure still: the picture stays where
-   * the user put it. */
+  /* A manual nudge holds the auto-exposure for a few seconds, as Krux
+   * does: the picture stays where the user put it, and the camera takes
+   * over again afterwards.  When the exposure has run out of room the
+   * gain takes the step, or a picture that is already at its brightest
+   * setting could not be made brighter at all. */
   ae_manual = 1;
+  ae_manual_hold = AE_MANUAL_FRAMES;
   if (delta > 0) {
     ae_exp += 0x100;
-    if (ae_exp > AE_EXP_MAX)
+    if (ae_exp > AE_EXP_MAX) {
       ae_exp = AE_EXP_MAX;
+      if (ae_gain < AE_GAIN_MAX)
+        ae_gain += (AE_GAIN_MAX - ae_gain < 0x20) ? AE_GAIN_MAX - ae_gain : 0x20;
+    }
   } else {
     ae_exp -= 0x100;
-    if (ae_exp < AE_EXP_MIN)
+    if (ae_exp < AE_EXP_MIN) {
       ae_exp = AE_EXP_MIN;
+      if (ae_gain > AE_GAIN_MIN)
+        ae_gain -= (ae_gain - AE_GAIN_MIN < 0x20) ? ae_gain - AE_GAIN_MIN : 0x20;
+    }
   }
   ae_apply();
   return ESP_OK;
