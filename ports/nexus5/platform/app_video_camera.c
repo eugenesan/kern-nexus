@@ -38,30 +38,46 @@ static app_video_frame_operation_cb_t s_cb;
 static uint32_t s_w = 960, s_h = 1280;
 static int s_started;
 
-/* --- exposure -----------------------------------------------------------
+/* --- exposure and focus -------------------------------------------------
  *
- * camd exposes the sensor's exposure and gain over its control socket but
- * has no auto-exposure of its own, and the sensor comes up at a very short
- * exposure.  In daylight that is still usable; indoors it is a black frame.
- * The sensor's default is therefore replaced with a mid-range exposure on
- * start and nudged from the frames we already measure, so a dim room still
- * shows a picture and a QR still decodes.
+ * camd exposes the sensor's exposure, gain, digital gain and frame length
+ * over its control socket, but nothing drives them: the sensor comes up at
+ * a fixed, very short exposure, so daylight is usable and a dim room is a
+ * black frame.
+ *
+ * The controller below is Krux's camera.py, ported: the level is the 95th
+ * percentile of the frame -- the bright pixels, which is where a QR code's
+ * white modules are -- the digital gain is given back first when the
+ * picture is too bright, and the exposure is the fine control, used last.
+ * A manual override holds the exposure still.
  */
 #define CAMD_CTL_SOCK "/data/kern/camd-ctl.sock"
-#define AE_TARGET 80
-#define AE_DEAD_BAND 20
-#define AE_STEP_FRAMES 3
-#define AE_EXP_MAX 0x0FFF
+#define AE_EXP_MIN 0x0100
+#define AE_EXP_MAX 0x09C8
+#define AE_EXP_DEFAULT 0x0400
+#define AE_GAIN_MIN 0x0060
 #define AE_GAIN_MAX 0x00FF
+#define AE_GAIN_DEFAULT 0x00A5
+#define AE_LUMA_MIN 1
+#define AE_LUMA_MAX 4
+#define AE_TARGET_DEFAULT 180
+#define AE_SATURATED 250
+#define AE_TOLERANCE 12
+#define AE_CLIP_PCT 3
+#define AE_VTS 0x09D6
 
-static int ae_exp = 0x0800;
-static int ae_gain = 0x0080;
-static int ae_frames;
+static int ae_exp = AE_EXP_DEFAULT;
+static int ae_gain = AE_GAIN_DEFAULT;
+static int ae_luma = AE_LUMA_MIN;
+static int ae_luma_applied = AE_LUMA_MIN;
+static int ae_target = AE_TARGET_DEFAULT;
+static int ae_manual;
 
-static int camd_ctl_exposure(int exp, int gain) {
+/* Opens the control socket and sends one command.  `cmd` holds the
+ * command byte and its arguments. */
+static int camd_ctl(const unsigned char *cmd, size_t len, char *reply,
+                    size_t reply_len) {
   struct sockaddr_un addr;
-  unsigned char cmd[5];
-  char reply[2] = {0};
   int s = socket(AF_UNIX, SOCK_STREAM, 0);
 
   if (s < 0)
@@ -73,69 +89,238 @@ static int camd_ctl_exposure(int exp, int gain) {
     close(s);
     return -1;
   }
-  cmd[0] = 'E';
-  cmd[1] = (unsigned char)(exp >> 8);
-  cmd[2] = (unsigned char)(exp & 0xFF);
-  cmd[3] = (unsigned char)(gain >> 8);
-  cmd[4] = (unsigned char)(gain & 0xFF);
-  if (write(s, cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+  if (write(s, cmd, len) != (ssize_t)len) {
     close(s);
     return -1;
   }
-  if (read(s, reply, sizeof(reply)) != (ssize_t)sizeof(reply) ||
-      reply[0] != 'O') {
-    close(s);
-    return -1;
+  if (reply && reply_len) {
+    ssize_t got = read(s, reply, reply_len);
+    if (got <= 0) {
+      close(s);
+      return -1;
+    }
   }
   close(s);
   return 0;
 }
 
-/* One step toward the target, from the frame we just read.  Runs on the
- * camera thread, so the socket work cannot touch the UI. */
-static void ae_update(const uint8_t *y, size_t len) {
-  unsigned long sum = 0;
-  size_t n = 0;
-  int mean;
+static int camd_ctl_exposure(int exp, int gain) {
+  unsigned char cmd[5];
+  char reply[2] = {0};
+
+  cmd[0] = 'E';
+  cmd[1] = (unsigned char)(exp >> 8);
+  cmd[2] = (unsigned char)(exp & 0xFF);
+  cmd[3] = (unsigned char)(gain >> 8);
+  cmd[4] = (unsigned char)(gain & 0xFF);
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return -1;
+  return reply[0] == 'O' ? 0 : -1;
+}
+
+static int camd_ctl_luma_gain(int gain) {
+  unsigned char cmd[2];
+  char reply[2] = {0};
+
+  cmd[0] = 'G';
+  cmd[1] = (unsigned char)gain;
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return -1;
+  return reply[0] == 'O' ? 0 : -1;
+}
+
+/* The frame length: the exposure can only grow to the length of a frame,
+ * so the QR path raises it to the vendor's 2518 lines. */
+static int camd_ctl_set_vts(int vts) {
+  unsigned char cmd[3];
+  char reply[2] = {0};
+
+  cmd[0] = 'V';
+  cmd[1] = (unsigned char)(vts >> 8);
+  cmd[2] = (unsigned char)(vts & 0xFF);
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return -1;
+  return reply[0] == 'O' ? 0 : -1;
+}
+
+/* A manual focus position: the lens steps, as the focus slider asks. */
+static int camd_ctl_set_focus(int step) {
+  unsigned char cmd[2];
+  char reply[2] = {0};
+
+  cmd[0] = 'F';
+  cmd[1] = (unsigned char)step;
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return -1;
+  return reply[0] == 'O' ? 0 : -1;
+}
+
+/* A fresh autofocus sweep, the way every phone camera focuses on what is
+ * tapped. */
+static int camd_ctl_refocus(void) {
+  unsigned char cmd[1] = {'R'};
+  char reply[2] = {0};
+
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return -1;
+  return reply[0] == 'O' ? 0 : -1;
+}
+
+/* floor(sqrt(v)), for the damped correction. */
+static int isqrt256(int v) {
+  int x = v, y = 0, bit = 1 << 14;
+
+  while (bit > x)
+    bit >>= 2;
+  while (bit) {
+    if (x >= y + bit) {
+      x -= y + bit;
+      y = (y >> 1) + bit;
+    } else {
+      y >>= 1;
+    }
+    bit >>= 2;
+  }
+  return y;
+}
+
+/* The 95th percentile of the frame and the share of pixels at the top.
+ * The frame is sampled: a full histogram of 1.2 million pixels per frame
+ * is not worth it at ten frames a second. */
+static int ae_level(const uint8_t *y, size_t len, int *clipped_pct) {
+  int hist[256];
+  size_t i, n = 0, acc = 0, total;
+  int clipped = 0;
+  int p95 = 0;
 
   if (!y || len == 0)
-    return;
-  if (++ae_frames < AE_STEP_FRAMES)
-    return;
-  ae_frames = 0;
-
-  for (size_t i = 0; i < len; i += 97) {
-    sum += y[i];
+    return -1;
+  memset(hist, 0, sizeof(hist));
+  for (i = 0; i < len; i += 16) {
+    hist[y[i]]++;
     n++;
   }
   if (n == 0)
-    return;
-  mean = (int)(sum / n);
-  if (mean < AE_TARGET - AE_DEAD_BAND) {
-    ae_exp = ae_exp + ae_exp / 2 + 32;
-    ae_gain = ae_gain + ae_gain / 2 + 8;
-  } else if (mean > AE_TARGET + AE_DEAD_BAND) {
-    ae_exp = ae_exp - ae_exp / 4;
-    ae_gain = ae_gain - ae_gain / 4;
-  } else {
-    return;
+    return -1;
+  for (i = AE_SATURATED; i < 256; i++)
+    clipped += (size_t)hist[i];
+  *clipped_pct = (int)((clipped * 100) / n);
+
+  total = n;
+  for (i = 0; i < 256; i++) {
+    acc += (size_t)hist[i];
+    if (acc * 100 >= total * 95) {
+      p95 = (int)i;
+      break;
+    }
   }
-  if (ae_exp < 1)
-    ae_exp = 1;
-  if (ae_exp > AE_EXP_MAX)
-    ae_exp = AE_EXP_MAX;
-  if (ae_gain < 1)
-    ae_gain = 1;
-  if (ae_gain > AE_GAIN_MAX)
-    ae_gain = AE_GAIN_MAX;
+  return p95;
+}
+
+static void ae_apply(void) {
+  if (ae_luma != ae_luma_applied) {
+    if (camd_ctl_luma_gain(ae_luma) == 0)
+      ae_luma_applied = ae_luma;
+  }
   (void)camd_ctl_exposure(ae_exp, ae_gain);
 }
 
+/* One step of the controller, from the frame just read.  `sweeping` says
+ * the autofocus is measuring: its sharpness scores are only comparable
+ * within one exposure, so the exposure holds still until it is done. */
+static void ae_step(const uint8_t *y, size_t len, int sweeping) {
+  int level, clipped_pct = 0;
+  int error, factor;
+  int step_up, step_down;
+
+  if (ae_manual || sweeping)
+    return;
+  level = ae_level(y, len, &clipped_pct);
+  if (level < 0)
+    return;
+
+  error = level - ae_target;
+  if (error <= AE_TOLERANCE && error >= -AE_TOLERANCE)
+    return;
+
+  /* The brightness follows the exposure, so the correction is a factor and
+   * not a number of lines: adding lines buys less and less brightness as
+   * the exposure grows, and a fixed step overshoots.  The factor is in
+   * 1/256 units. */
+  if (level > 0)
+    factor = (ae_target * 256) / level;
+  else
+    factor = 256 + 358; /* 1.4 */
+  if (factor > 256 + 204) /* 1.8 */
+    factor = 256 + 204;
+  if (factor < 115) /* 0.45 */
+    factor = 115;
+  if (error > 2 * AE_TOLERANCE || error < -2 * AE_TOLERANCE) {
+    /* A big change (a lamp, a torch, a hand over the lens) takes the full
+     * correction. */
+  } else {
+    /* Near the target the step is damped, so the picture lands in the
+     * dead band without swinging across it. */
+    factor = isqrt256(factor * 256);
+    if (factor > 256 + 51) /* 1.20 */
+      factor = 256 + 51;
+    if (factor < 256 - 38) /* 0.85 */
+      factor = 256 - 38;
+  }
+  step_up = (ae_exp * (factor - 256)) / 256;
+  step_down = (ae_exp * (256 - factor)) / 256;
+  if (step_up < 0x30)
+    step_up = 0x30;
+  if (step_down < 0x30)
+    step_down = 0x30;
+
+  if (clipped_pct > AE_CLIP_PCT || level >= AE_SATURATED) {
+    /* Over the top: the digital gain is a plain multiply, so it is the
+     * cheapest thing to give back. */
+    if (ae_luma > AE_LUMA_MIN)
+      ae_luma--;
+    else if (ae_exp > AE_EXP_MIN)
+      ae_exp = (ae_exp * 85) / 100;
+    else if (ae_gain > AE_GAIN_MIN)
+      ae_gain -= 0x18;
+  } else if (level > ae_target + AE_TOLERANCE) {
+    if (ae_luma > AE_LUMA_MIN)
+      ae_luma--;
+    else if (ae_exp > AE_EXP_MIN)
+      ae_exp -= step_down;
+    else if (ae_gain > AE_GAIN_MIN)
+      ae_gain -= 0x18;
+  } else {
+    /* Too dark: the exposure is the long exposure and has the least
+     * noise, so it goes first, then the analog gain. */
+    if (ae_exp < AE_EXP_MAX)
+      ae_exp += step_up;
+    else if (ae_gain < AE_GAIN_MAX)
+      ae_gain += 0x18;
+    else if (ae_luma < AE_LUMA_MAX && level * 2 < ae_target)
+      ae_luma++;
+  }
+  if (ae_exp < AE_EXP_MIN)
+    ae_exp = AE_EXP_MIN;
+  if (ae_exp > AE_EXP_MAX)
+    ae_exp = AE_EXP_MAX;
+  if (ae_gain < AE_GAIN_MIN)
+    ae_gain = AE_GAIN_MIN;
+  if (ae_gain > AE_GAIN_MAX)
+    ae_gain = AE_GAIN_MAX;
+  ae_apply();
+}
+
 static void ae_start(void) {
-  ae_exp = 0x0800;
-  ae_gain = 0x0080;
-  ae_frames = 0;
-  (void)camd_ctl_exposure(ae_exp, ae_gain);
+  ae_exp = AE_EXP_DEFAULT;
+  ae_gain = AE_GAIN_DEFAULT;
+  ae_luma = AE_LUMA_MIN;
+  ae_luma_applied = AE_LUMA_MIN;
+  ae_manual = 0;
+  /* The exposure can only reach the length of a frame, so the frame is
+   * raised to the vendor's 2518 lines before the exposure goes there. */
+  (void)camd_ctl_set_vts(AE_VTS);
+  ae_apply();
 }
 
 static void klog(const char *fmt, ...) {
@@ -200,6 +385,7 @@ static void *camera_thread(void *arg) {
       continue; /* no frame ready */
     uint32_t w = (uint32_t)hdr[8] | (uint32_t)hdr[9] << 8;
     uint32_t h = (uint32_t)hdr[10] | (uint32_t)hdr[11] << 8;
+    int af_sweeping = hdr[18];
     uint32_t ysz = (uint32_t)hdr[24] | (uint32_t)hdr[25] << 8 |
                    (uint32_t)hdr[26] << 16 | (uint32_t)hdr[27] << 24;
     uint32_t uvsz = (uint32_t)hdr[28] | (uint32_t)hdr[29] << 8 |
@@ -217,7 +403,7 @@ static void *camera_thread(void *arg) {
       s_sock = -1;
       continue;
     }
-    ae_update(frame, (size_t)ysz);
+    ae_step(frame, (size_t)ysz, af_sweeping);
     if (s_cb && !s_stop) {
       static int frames;
       if (!frames)
@@ -335,17 +521,47 @@ esp_err_t app_video_get_resolution(uint32_t *width, uint32_t *height) {
 }
 
 esp_err_t app_video_set_ae_target(uint32_t level) {
-  (void)level;
+  if (level < 2)
+    level = 2;
+  if (level > 235)
+    level = 235;
+  ae_target = (int)level;
   return ESP_OK;
 }
 
 esp_err_t app_video_set_focus(uint32_t position) {
-  (void)position;
+  /* The lens has a fixed number of steps; the slider covers 0..1023. */
+  if (position > 1023)
+    position = 1023;
+  if (camd_ctl_set_focus((int)((position * 44) / 1023)) != 0)
+    return ESP_FAIL;
   return ESP_OK;
 }
 
-bool app_video_has_focus_motor(void) { return false; }
-bool app_video_has_ae_control(void) { return false; }
+esp_err_t app_video_refocus(void) {
+  return camd_ctl_refocus() == 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t app_video_adjust_exposure(int32_t delta) {
+  /* A manual nudge holds the auto-exposure still: the picture stays where
+   * the user put it. */
+  ae_manual = 1;
+  if (delta > 0) {
+    ae_exp += 0x100;
+    if (ae_exp > AE_EXP_MAX)
+      ae_exp = AE_EXP_MAX;
+  } else {
+    ae_exp -= 0x100;
+    if (ae_exp < AE_EXP_MIN)
+      ae_exp = AE_EXP_MIN;
+  }
+  ae_apply();
+  return ESP_OK;
+}
+
+bool app_video_has_focus_motor(void) { return true; }
+
+bool app_video_has_ae_control(void) { return true; }
 
 uint32_t app_video_ppa_snap_crop(uint32_t crop_max, uint32_t target) {
   return crop_max < target ? crop_max : target;

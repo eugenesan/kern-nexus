@@ -637,6 +637,8 @@ static int luma_gain = 1;
 static int unsharp_amount = 0;
 static int refocus_request;
 static int refocus_full;
+/* A manual focus position, asked for over the control socket. */
+static int focus_move_request;
 /* The last fine-sweep step.  A normal scan-start refocus starts the
  * coarse sweep just below it instead of at infinity, so a second scan
  * reaches the focus in a few steps.  -1 means no cache yet. */
@@ -3805,6 +3807,12 @@ if (dump_now) {
 						printf("[af] full sweep\n");
 					}
 				}
+				if (focus_move_request) {
+					focus_move_request = 0;
+					actuator_move(focus_step);
+					printf("[af] focus step %d (ctl)\n", focus_step);
+					phase = 5;
+				}
 				if (focus_step >= 0) {
 					phase = 5;
 				} else if (phase == 5) {
@@ -4408,6 +4416,19 @@ static void *ctl_thread(void *arg)
 						       nexp, ngain);
 					}
 					write(cfd, erc == 0 ? "OK" : "ER", 2);
+				}
+			} else if (c == 'F') {
+				/* A manual focus position: the lens is moved
+				 * by the frame thread, which owns the
+				 * sensor. */
+				unsigned char p[1];
+				if (read(cfd, p, 1) == 1) {
+					int step = p[0];
+					if (step > ACT_TOTAL_STEPS - 1)
+						step = ACT_TOTAL_STEPS - 1;
+					focus_step = step;
+					focus_move_request = 1;
+					write(cfd, "OK", 2);
 				}
 			} else if (c == 'D') {
 				dump_now = 1;
