@@ -4315,6 +4315,22 @@ static void *socket_thread(void *arg)
 					}
 					write(cfd, erc == 0 ? "OK" : "ER", 2);
 				}
+			} else if (buf[0] == 'q') {
+				/* What the sensor is doing right now, so a page
+				 * can start its auto-exposure from there instead
+				 * of from a fixed default (which makes the first
+				 * frames darker than the ones before it). */
+				uint16_t e = 0, g = 0;
+				unsigned char r[6];
+				sensor_read_reg(0x0202, &e);
+				sensor_read_reg(0x0204, &g);
+				r[0] = 'O';
+				r[1] = (unsigned char)(e >> 8);
+				r[2] = (unsigned char)(e & 0xff);
+				r[3] = (unsigned char)(g >> 8);
+				r[4] = (unsigned char)(g & 0xff);
+				r[5] = (unsigned char)luma_gain;
+				write(cfd, r, sizeof(r));
 			} else if (buf[0] == 'G') {
 				unsigned char p[1];
 				if (socket_read_exact(cfd, p, 1) == 0) {

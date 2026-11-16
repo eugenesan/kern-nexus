@@ -132,10 +132,14 @@ static int camd_ctl(const unsigned char *cmd, size_t len, char *reply,
     return -1;
   }
   if (reply && reply_len) {
-    ssize_t got = read(s, reply, reply_len);
-    if (got <= 0) {
-      close(s);
-      return -1;
+    size_t done = 0;
+    while (done < reply_len) {
+      ssize_t got = read(s, reply + done, reply_len - done);
+      if (got <= 0) {
+        close(s);
+        return -1;
+      }
+      done += (size_t)got;
     }
   }
   close(s);
@@ -191,6 +195,22 @@ static int camd_ctl_set_focus(int step) {
   if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
     return -1;
   return reply[0] == 'O' ? 0 : -1;
+}
+
+/* What the sensor is doing right now: exposure, analog gain and the
+ * digital luma gain camd applies.  -1 when the daemon cannot say. */
+static int camd_ctl_snapshot(int *exp, int *gain, int *luma) {
+  unsigned char cmd[1] = {'q'};
+  unsigned char reply[6] = {0};
+
+  if (camd_ctl(cmd, sizeof(cmd), (char *)reply, sizeof(reply)) != 0)
+    return -1;
+  if (reply[0] != 'O')
+    return -1;
+  *exp = (reply[1] << 8) | reply[2];
+  *gain = (reply[3] << 8) | reply[4];
+  *luma = reply[5] ? reply[5] : AE_LUMA_MIN;
+  return 0;
 }
 
 /* A fresh autofocus sweep, the way every phone camera focuses on what is
@@ -402,10 +422,33 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
 }
 
 static void ae_start(void) {
-  ae_exp = AE_EXP_DEFAULT;
-  ae_gain = AE_GAIN_DEFAULT;
-  ae_luma = AE_LUMA_MIN;
-  ae_luma_applied = AE_LUMA_MIN;
+  int exp = 0, gain = 0, luma = 0;
+
+  /* Start from what the sensor is already showing.  The last session left
+   * it on a picture the user could see; seeding from a fixed default made
+   * the first frames darker than the ones before them, and the controller
+   * then climbed back over several seconds. */
+  if (camd_ctl_snapshot(&exp, &gain, &luma) != 0 || exp <= 0) {
+    exp = ae_exp;
+    gain = ae_gain;
+    luma = ae_luma_applied;
+  }
+  if (exp < AE_EXP_MIN)
+    exp = AE_EXP_MIN;
+  if (exp > AE_EXP_MAX)
+    exp = AE_EXP_MAX;
+  if (gain < AE_GAIN_MIN)
+    gain = AE_GAIN_MIN;
+  if (gain > AE_GAIN_MAX)
+    gain = AE_GAIN_MAX;
+  if (luma < AE_LUMA_MIN || luma > AE_LUMA_MAX)
+    luma = AE_LUMA_MIN;
+  ae_exp = exp;
+  ae_gain = gain;
+  /* The daemon has already applied this digital gain, so it must not be
+   * sent again (that would make the picture jump). */
+  ae_luma = luma;
+  ae_luma_applied = luma;
   ae_manual = 0;
   ae_manual_hold = 0;
   ae_hold_sweep = 0;
