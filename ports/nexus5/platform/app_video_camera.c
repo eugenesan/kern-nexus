@@ -38,6 +38,106 @@ static app_video_frame_operation_cb_t s_cb;
 static uint32_t s_w = 960, s_h = 1280;
 static int s_started;
 
+/* --- exposure -----------------------------------------------------------
+ *
+ * camd exposes the sensor's exposure and gain over its control socket but
+ * has no auto-exposure of its own, and the sensor comes up at a very short
+ * exposure.  In daylight that is still usable; indoors it is a black frame.
+ * The sensor's default is therefore replaced with a mid-range exposure on
+ * start and nudged from the frames we already measure, so a dim room still
+ * shows a picture and a QR still decodes.
+ */
+#define CAMD_CTL_SOCK "/data/kern/camd-ctl.sock"
+#define AE_TARGET 80
+#define AE_DEAD_BAND 20
+#define AE_STEP_FRAMES 3
+#define AE_EXP_MAX 0x0FFF
+#define AE_GAIN_MAX 0x00FF
+
+static int ae_exp = 0x0800;
+static int ae_gain = 0x0080;
+static int ae_frames;
+
+static int camd_ctl_exposure(int exp, int gain) {
+  struct sockaddr_un addr;
+  unsigned char cmd[5];
+  char reply[2] = {0};
+  int s = socket(AF_UNIX, SOCK_STREAM, 0);
+
+  if (s < 0)
+    return -1;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", CAMD_CTL_SOCK);
+  if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+    close(s);
+    return -1;
+  }
+  cmd[0] = 'E';
+  cmd[1] = (unsigned char)(exp >> 8);
+  cmd[2] = (unsigned char)(exp & 0xFF);
+  cmd[3] = (unsigned char)(gain >> 8);
+  cmd[4] = (unsigned char)(gain & 0xFF);
+  if (write(s, cmd, sizeof(cmd)) != (ssize_t)sizeof(cmd)) {
+    close(s);
+    return -1;
+  }
+  if (read(s, reply, sizeof(reply)) != (ssize_t)sizeof(reply) ||
+      reply[0] != 'O') {
+    close(s);
+    return -1;
+  }
+  close(s);
+  return 0;
+}
+
+/* One step toward the target, from the frame we just read.  Runs on the
+ * camera thread, so the socket work cannot touch the UI. */
+static void ae_update(const uint8_t *y, size_t len) {
+  unsigned long sum = 0;
+  size_t n = 0;
+  int mean;
+
+  if (!y || len == 0)
+    return;
+  if (++ae_frames < AE_STEP_FRAMES)
+    return;
+  ae_frames = 0;
+
+  for (size_t i = 0; i < len; i += 97) {
+    sum += y[i];
+    n++;
+  }
+  if (n == 0)
+    return;
+  mean = (int)(sum / n);
+  if (mean < AE_TARGET - AE_DEAD_BAND) {
+    ae_exp = ae_exp + ae_exp / 2 + 32;
+    ae_gain = ae_gain + ae_gain / 2 + 8;
+  } else if (mean > AE_TARGET + AE_DEAD_BAND) {
+    ae_exp = ae_exp - ae_exp / 4;
+    ae_gain = ae_gain - ae_gain / 4;
+  } else {
+    return;
+  }
+  if (ae_exp < 1)
+    ae_exp = 1;
+  if (ae_exp > AE_EXP_MAX)
+    ae_exp = AE_EXP_MAX;
+  if (ae_gain < 1)
+    ae_gain = 1;
+  if (ae_gain > AE_GAIN_MAX)
+    ae_gain = AE_GAIN_MAX;
+  (void)camd_ctl_exposure(ae_exp, ae_gain);
+}
+
+static void ae_start(void) {
+  ae_exp = 0x0800;
+  ae_gain = 0x0080;
+  ae_frames = 0;
+  (void)camd_ctl_exposure(ae_exp, ae_gain);
+}
+
 static void klog(const char *fmt, ...) {
   int fd = open("/dev/kmsg", O_WRONLY);
   if (fd >= 0) {
@@ -117,6 +217,7 @@ static void *camera_thread(void *arg) {
       s_sock = -1;
       continue;
     }
+    ae_update(frame, (size_t)ysz);
     if (s_cb && !s_stop) {
       static int frames;
       if (!frames)
@@ -195,6 +296,7 @@ esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
   }
   s_cb = cb;
   s_stop = 0;
+  ae_start();
   if (pthread_create(&s_thread, NULL, camera_thread, NULL) != 0) {
     klog("kern-nexus camera: pthread_create failed\n");
     return ESP_FAIL;
