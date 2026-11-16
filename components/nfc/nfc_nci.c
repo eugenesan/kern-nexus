@@ -167,7 +167,7 @@ static const uint8_t SELECT_PARAMS[] = {
 #define COMMAND_TIMEOUT_MS 2000
 #define ANNOUNCE_TIMEOUT_MS 5000
 #define ACTIVATE_NTF_TIMEOUT_MS 3000
-#define APDU_TIMEOUT_MS 5000
+#define APDU_TIMEOUT_MS 12000
 #define DISCOVER_READ_MS 500
 
 /* --- internal state ---------------------------------------------------- */

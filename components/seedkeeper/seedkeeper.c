@@ -257,28 +257,29 @@ static int sk_sc_init(kern_seedkeeper_t *sk) {
       WALLY_OK)
     return -1;
 
-  /* The first APDU after an RF re-activation is sometimes lost.  Retry the
-   * 0x81 command; a GET_STATUS between attempts also keeps the link alive. */
+  /* The applet computes an ECDH and two ECDSA signatures for 0x81, which
+   * takes seconds on a JavaCard.  The exchange is therefore given room,
+   * and a lost or refused attempt is retried after the card has been
+   * re-activated: a lost 0x81 may still have initialized the applet, and
+   * selecting the AID alone does not clear that card-side state. */
   int init_rc = -1;
-  for (int attempt = 0; attempt < 3; attempt++) {
+  for (int attempt = 0; attempt < 5; attempt++) {
     if (attempt) {
-      /* A lost 0x81 may still have initialized the applet, and selecting
-       * the AID alone does not clear that card-side state.  Power-cycle the
-       * RF link and re-activate the card before trying 0x81 again; otherwise
-       * the applet answers 6E00 (class not supported). */
       (void)kern_nfc_bring_up((kern_nfc_t *)sk->ctx);
       (void)seedkeeper_select(sk);
-      usleep(150000);
+      usleep(400000);
     }
     resp_len = sizeof(resp);
     init_rc = seedkeeper_exchange(sk, apdu, sizeof(apdu), resp, &resp_len, &sw);
     sk_trace("init try", init_rc);
+    if (init_rc == 0 && sw != SEEDKEEPER_SW_OK)
+      sk_trace("init sw", sw);
     if (init_rc == 0 && sw == SEEDKEEPER_SW_OK)
       break;
     if (init_rc == 0 && sw != SEEDKEEPER_SW_OK)
       init_rc = -1;
     (void)sk_keepalive(sk);
-    usleep(50000);
+    usleep(100000);
   }
   if (init_rc != 0) {
     sk_trace("init io", 0);
