@@ -156,11 +156,16 @@ order, which is the way to prove the tree still builds from scratch.
 
 Host tests (no device): `bash scripts/test.sh` (sighash vectors, the
 SeedKeeper library and applet-emulator flows, cUR, QR/k_quirc and kern's
-core/QR suites).  cUR's Makefile builds in its source tree, so its suite
-is run from a copy:
+core/QR suites).  Everything is built under `$KERN_NEXUS_BUILD`: cUR's
+suite from a copy (`scripts/build-cur-tests.sh`), and kern's QR test
+builds cUR's archive there through `UR_BUILD`, which `scripts/test.sh`
+exports.  The `bip138` and core PSBT suites need host mbedTLS
+(`libmbedtls-dev`: `psa/crypto.h`, `-lmbedcrypto`) and are skipped with a
+clear message when it is absent.
 
 ```sh
-bash scripts/build-cur-tests.sh     # copy in /tmp, objects never in the checkout
+bash scripts/build-cur-tests.sh                      # cUR alone (copy in /tmp)
+UR_BUILD=/tmp/x bash -c 'cd kern && make -C main/qr/test run'   # explicit
 ```
 
 Expected output: ELF 32-bit ARM, statically linked, no `NEEDED` entries.

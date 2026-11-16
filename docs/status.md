@@ -90,6 +90,7 @@ machine that has the remotes.
 # host tests (no device)
 bash scripts/test.sh                      # includes cUR's suite
 bash scripts/build-cur-tests.sh           # cUR alone, built from a copy in /tmp
+# (bip138/core need host mbedTLS; they are skipped without libmbedtls-dev)
 
 # full build (kernel, mbedTLS, zlib, kern, camd, images)
 bash scripts/build-all.sh
