@@ -56,11 +56,14 @@ if command -v "$STRIP" >/dev/null 2>&1; then
 fi
 
 # The stub, TWRP, and the sideload child's hardcoded /sbin/recovery path.
+# The stub is built outside the source tree: rootfs/stub/ holds the
+# scripts and the init rc, not build products.
 STUB_FLAGS=""
 [ "$STANDARD" = "1" ] && STUB_FLAGS="--standard"
-bash "$HERE/build-stub-init.sh" $STUB_FLAGS "$HERE/stub/kern-init" >/dev/null
+STUB_BIN="${KERN_NEXUS_BUILD:-${TMPDIR:-/tmp}/kern-nexus}/kern-init"
+bash "$HERE/build-stub-init.sh" $STUB_FLAGS "$STUB_BIN" >/dev/null
 mv "$WORK/rd/sbin/recovery" "$WORK/rd/sbin/recovery.stock"
-cp "$HERE/stub/kern-init" "$WORK/rd/sbin/kern-init"
+cp "$STUB_BIN" "$WORK/rd/sbin/kern-init"
 chmod 755 "$WORK/rd/sbin/kern-init" "$WORK/rd/sbin/recovery.stock"
 ln -sf recovery.stock "$WORK/rd/sbin/recovery"
 

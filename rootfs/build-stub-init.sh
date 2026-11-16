@@ -6,8 +6,9 @@
 # worth relying on) with the armel toolchain -- the same one the
 # firmware's MicroPython is built with.  See TOOLCHAIN.md.
 #
-# The result is stub/kern-init, which build-stub-ramdisk.sh installs as
-# /sbin/kern-init in the stub ramdisk.
+# The result is kern-init, which build-stub-ramdisk.sh installs as
+# /sbin/kern-init in the stub ramdisk.  By default it is written next to
+# the script; the ramdisk builder passes a path outside the source tree.
 #
 # Usage:
 #   ./build-stub-init.sh [--standard] [output]
