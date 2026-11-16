@@ -86,6 +86,9 @@ static int ae_manual_hold;
 static int ae_hold_sweep;
 static int64_t ae_hold_since;
 static int ae_frames;
+/* The first frames after streaming starts are the sensor settling; they
+ * are not the picture the user is looking at yet. */
+static int ae_warmup;
 /* A single P95 frame can be a rolling band on a screen, or a bright
  * speck in a dark room, so a correction is only taken when two frames in
  * a row agree on the side of the target.  The picture is then locked
@@ -294,6 +297,10 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
   int step_up, step_down;
 
   ae_frames++;
+  if (ae_warmup) {
+    ae_warmup--;
+    return;
+  }
   if (ae_changed_at && ae_now_ms() - ae_changed_at < 800)
     return;
   if (ae_manual) {
@@ -390,7 +397,7 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
     if (ae_luma > AE_LUMA_MIN)
       ae_luma--;
     else if (ae_exp > AE_EXP_MIN)
-      ae_exp = (ae_exp * factor) / 256;
+      ae_exp = (ae_exp * 85) / 100;
     else if (ae_gain > AE_GAIN_MIN)
       ae_gain -= (ae_gain - AE_GAIN_MIN < 0x30) ? ae_gain - AE_GAIN_MIN : 0x30;
   } else if (level > ae_target + AE_TOLERANCE) {
@@ -458,6 +465,7 @@ static void ae_start(void) {
   ae_settle_count = 0;
   ae_locked = 0;
   ae_changed_at = 0;
+  ae_warmup = 3;
   /* The exposure can only reach the length of a frame, so the frame is
    * raised to the vendor's 2518 lines before the exposure goes there. */
   (void)camd_ctl_set_vts(AE_VTS);

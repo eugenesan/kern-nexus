@@ -776,6 +776,23 @@ static int state_read_persist(const char *name, int def, int lo, int hi)
 	return v;
 }
 
+/* What the sensor is using right now.  Both the exposure (0x0202/0x0203)
+ * and the gain (0x0204/0x0205) are 16-bit, high byte first, and the
+ * register helper reads one byte at a time. */
+static int sensor_read_exposure_gain(int *exp, int *gain)
+{
+	uint16_t eh = 0, el = 0, gh = 0, gl = 0;
+
+	if (sensor_read_reg(0x0202, &eh) != 0 ||
+	    sensor_read_reg(0x0203, &el) != 0 ||
+	    sensor_read_reg(0x0204, &gh) != 0 ||
+	    sensor_read_reg(0x0205, &gl) != 0)
+		return -1;
+	*exp = (eh << 8) | el;
+	*gain = (gh << 8) | gl;
+	return 0;
+}
+
 static int sensor_program_mode(void)
 {
 	if (sensor_cfg(CFG_POWER_UP, NULL, 0) < 0)
@@ -853,6 +870,18 @@ static int sensor_program_mode(void)
 				{ 0x0387, 0x03, 0 },	/* y_odd_inc */
 			};
 			sensor_write_regs(binning, 2);
+		}
+	}
+	/* The mode table leaves the sensor on a sane exposure of its own.
+	 * Remember it before anything streams, so a page's auto-exposure can
+	 * start from what the first frame actually shows. */
+	{
+		int e = 0, g = 0;
+		if (sensor_read_exposure_gain(&e, &g) == 0 && e > 0) {
+			cam_exposure = e;
+			cam_gain = g;
+			printf("[sensor] starting exposure=0x%04x gain=0x%04x\n",
+			       e, g);
 		}
 	}
 	return 0;
@@ -4326,22 +4355,6 @@ static void *socket_thread(void *arg)
 					}
 					write(cfd, erc == 0 ? "OK" : "ER", 2);
 				}
-			} else if (buf[0] == 'q') {
-				/* What the sensor is doing right now, so a page
-				 * can start its auto-exposure from there instead
-				 * of from a fixed default (which makes the first
-				 * frames darker than the ones before it). */
-				uint16_t e = 0, g = 0;
-				unsigned char r[6];
-				sensor_read_reg(0x0202, &e);
-				sensor_read_reg(0x0204, &g);
-				r[0] = 'O';
-				r[1] = (unsigned char)(e >> 8);
-				r[2] = (unsigned char)(e & 0xff);
-				r[3] = (unsigned char)(g >> 8);
-				r[4] = (unsigned char)(g & 0xff);
-				r[5] = (unsigned char)luma_gain;
-				write(cfd, r, sizeof(r));
 			} else if (buf[0] == 'G') {
 				unsigned char p[1];
 				if (socket_read_exact(cfd, p, 1) == 0) {
@@ -4444,6 +4457,24 @@ static void *ctl_thread(void *arg)
 					}
 					write(cfd, erc == 0 ? "OK" : "ER", 2);
 				}
+			} else if (c == 'q') {
+				/* The exposure and gain the sensor is last
+				 * known to be using, so a page starts from
+				 * them instead of from a fixed default (which
+				 * made its first frames darker than the ones
+				 * before).  Cached, not read from the sensor:
+				 * CCI traffic from this thread fights the
+				 * running stream. */
+				unsigned char r[6];
+				int e = cam_exposure > 0 ? cam_exposure : 0;
+				int g = cam_gain > 0 ? cam_gain : 0;
+				r[0] = 'O';
+				r[1] = (unsigned char)(e >> 8);
+				r[2] = (unsigned char)(e & 0xff);
+				r[3] = (unsigned char)(g >> 8);
+				r[4] = (unsigned char)(g & 0xff);
+				r[5] = (unsigned char)luma_gain;
+				write(cfd, r, sizeof(r));
 			} else if (c == 'A') {
 				/* Release a fixed focus position: the lens
 				 * goes back to the sweep state machine, which
