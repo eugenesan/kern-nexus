@@ -1124,6 +1124,10 @@ static int latest_mean;
 static unsigned char *latest_uv = NULL;
 static int latest_seq = 0;
 static int latest_ready = 0;
+/* When the latest frame was captured.  A new client must not be served a
+ * picture from before it connected: pointing the phone away from a code
+ * and opening the scanner again would otherwise decode the old code. */
+static uint64_t latest_pub_ns = 0;
 
 /* ------------------------------------------------------------------ *
  * the shared-memory frame
@@ -3220,6 +3224,7 @@ static void *client_thread(void *arg)
 							       crop_w + ox, w);
 						latest_seq++;
 						latest_ready = 1;
+						latest_pub_ns = now_ns();
 						shm_publish();
 						published = 1;
 						#ifndef KRUX_RELEASE
@@ -3658,6 +3663,7 @@ if (dump_now) {
 					if (publish) {
 						latest_seq++;
 						latest_ready = 1;
+						latest_pub_ns = now_ns();
 						published = 1;
 						shm_publish();
 					}
@@ -4168,7 +4174,12 @@ static void *socket_thread(void *arg)
 
 				pthread_mutex_lock(&frame_mutex);
 				seq = latest_seq;
-				ready = latest_ready;
+				/* A frame the pipeline published a while ago
+				 * belongs to the scene the phone was pointed at
+				 * before this page opened.  Wait for a new one
+				 * instead of handing it over. */
+				ready = latest_ready && latest_pub_ns != 0 &&
+					(now_ns() - latest_pub_ns) < 300000000ULL;
 				if (ready && latest_y && latest_uv) {
 					copy = malloc(ysz + uvsz);
 					if (copy) {
