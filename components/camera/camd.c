@@ -4417,6 +4417,17 @@ static void *ctl_thread(void *arg)
 					}
 					write(cfd, erc == 0 ? "OK" : "ER", 2);
 				}
+			} else if (c == 'A') {
+				/* Release a fixed focus position: the lens
+				 * goes back to the sweep state machine, which
+				 * leaves it where it is if it has already
+				 * focused.  A page asks for this when its
+				 * preview starts, so a manual step from an
+				 * earlier session does not pin the lens. */
+				focus_step = -1;
+				focus_move_request = 0;
+				printf("[af] auto focus\n");
+				write(cfd, "OK", 2);
 			} else if (c == 'F') {
 				/* A manual focus position: the lens is moved
 				 * by the frame thread, which owns the

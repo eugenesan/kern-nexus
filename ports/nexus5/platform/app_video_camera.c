@@ -20,6 +20,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "esp_err.h"
@@ -78,6 +79,37 @@ static int ae_luma_applied = AE_LUMA_MIN;
 static int ae_target = AE_TARGET_DEFAULT;
 static int ae_manual;
 static int ae_manual_hold;
+/* A sweep the user asked for: the scores are only comparable within one
+ * exposure, so the AE holds still until it is done.  The camera's own
+ * sweep at stream start is not held: the exposure follows the scene and
+ * camd abandons that sweep when it changes. */
+static int ae_hold_sweep;
+static int64_t ae_hold_since;
+static int ae_frames;
+/* A single P95 frame can be a rolling band on a screen, or a bright
+ * speck in a dark room, so a correction is only taken when two frames in
+ * a row agree on the side of the target.  The picture is then locked
+ * once it has sat in the dead band for a few frames, so a measurement
+ * that is never exactly on target does not move the exposure forever. */
+static int ae_side;
+static int ae_side_count;
+static int ae_settle_count;
+static int ae_locked;
+/* A change is given time to reach the picture before the next decision.
+ * The frame the app has in hand is behind the sensor -- camd buffers, the
+ * socket copies, the preview pass -- so a correction applied every frame
+ * is decided on a picture from before the last one, and the exposure
+ * swings from white to black.  The wait is in milliseconds, not frames:
+ * the scanner runs at four frames a second in a dark room and less than
+ * one on a dense code, and a frame count that suits one starves the
+ * other. */
+static int64_t ae_changed_at;
+
+static int64_t ae_now_ms(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
 /* Opens the control socket and sends one command.  `cmd` holds the
  * command byte and its arguments. */
@@ -225,6 +257,7 @@ static int ae_level(const uint8_t *y, size_t len, int *clipped_pct) {
 }
 
 static void ae_apply(void) {
+  ae_changed_at = ae_now_ms();
   if (ae_luma != ae_luma_applied) {
     if (camd_ctl_luma_gain(ae_luma) == 0)
       ae_luma_applied = ae_luma;
@@ -240,22 +273,61 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
   int error, factor;
   int step_up, step_down;
 
+  ae_frames++;
+  if (ae_changed_at && ae_now_ms() - ae_changed_at < 800)
+    return;
   if (ae_manual) {
     if (--ae_manual_hold > 0)
       return;
     /* The nudge has held for a few seconds; the camera takes over
      * again, so the next scene is exposed correctly. */
     ae_manual = 0;
+    ae_locked = 0;
+    ae_side_count = 0;
   }
-  if (sweeping)
-    return;
+  if (sweeping && ae_hold_sweep) {
+    /* A sweep that never reports that it is done must not freeze the
+     * exposure for the rest of the session. */
+    if (ae_now_ms() - ae_hold_since < 20000)
+      return;
+    ae_hold_sweep = 0;
+  }
   level = ae_level(y, len, &clipped_pct);
   if (level < 0)
     return;
 
   error = level - ae_target;
-  if (error <= AE_TOLERANCE && error >= -AE_TOLERANCE)
+  if (!sweeping)
+    ae_hold_sweep = 0;
+  if (error <= AE_TOLERANCE && error >= -AE_TOLERANCE) {
+    /* The picture is in the dead band: hold it there.  Three frames in
+     * a row and it is locked, and only a real change wakes it. */
+    ae_side_count = 0;
+    if (++ae_settle_count >= 3)
+      ae_locked = 1;
     return;
+  }
+  ae_settle_count = 0;
+  if (ae_locked) {
+    /* Stay locked through a small drift; a real change wakes it on the
+     * first measurement that is outside. */
+    if (error <= 18 && error >= -18 && clipped_pct <= AE_CLIP_PCT)
+      return;
+    ae_locked = 0;
+  }
+
+  /* One frame on a side is not enough: two in a row are. */
+  {
+    int side = error > 0 ? 1 : -1;
+    if (side != ae_side) {
+      ae_side = side;
+      ae_side_count = 1;
+      return;
+    }
+    if (++ae_side_count < 2)
+      return;
+    ae_side_count = 0;
+  }
 
   /* The brightness follows the exposure, so the correction is a factor and
    * not a number of lines: adding lines buys less and less brightness as
@@ -290,13 +362,17 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
 
   if (clipped_pct > AE_CLIP_PCT || level >= AE_SATURATED) {
     /* Over the top: the digital gain is a plain multiply, so it is the
-     * cheapest thing to give back. */
+     * cheapest thing to give back.  The exposure then takes the whole
+     * correction, not a fixed fifteen per cent: a bright screen keeps
+     * the bright pixels at the ceiling over a wide range of exposures,
+     * so a small step leaves it clipped for many frames, and the
+     * scanner only takes a few frames a second. */
     if (ae_luma > AE_LUMA_MIN)
       ae_luma--;
     else if (ae_exp > AE_EXP_MIN)
-      ae_exp = (ae_exp * 85) / 100;
+      ae_exp = (ae_exp * factor) / 256;
     else if (ae_gain > AE_GAIN_MIN)
-      ae_gain -= 0x18;
+      ae_gain -= (ae_gain - AE_GAIN_MIN < 0x30) ? ae_gain - AE_GAIN_MIN : 0x30;
   } else if (level > ae_target + AE_TOLERANCE) {
     if (ae_luma > AE_LUMA_MIN)
       ae_luma--;
@@ -332,6 +408,13 @@ static void ae_start(void) {
   ae_luma_applied = AE_LUMA_MIN;
   ae_manual = 0;
   ae_manual_hold = 0;
+  ae_hold_sweep = 0;
+  ae_frames = 0;
+  ae_side = 0;
+  ae_side_count = 0;
+  ae_settle_count = 0;
+  ae_locked = 0;
+  ae_changed_at = 0;
   /* The exposure can only reach the length of a frame, so the frame is
    * raised to the vendor's 2518 lines before the exposure goes there. */
   (void)camd_ctl_set_vts(AE_VTS);
@@ -550,17 +633,40 @@ esp_err_t app_video_set_focus(uint32_t position) {
     position = 1023;
   if (camd_ctl_set_focus((int)((position * 44) / 1023)) != 0)
     return ESP_FAIL;
+  ae_hold_sweep = 0;
   return ESP_OK;
 }
 
 esp_err_t app_video_refocus(void) {
-  return camd_ctl_refocus(1) == 0 ? ESP_OK : ESP_FAIL;
+  if (camd_ctl_refocus(1) != 0)
+    return ESP_FAIL;
+  ae_hold_sweep = 1;
+  ae_hold_since = ae_now_ms();
+  return ESP_OK;
 }
 
-/* The same, but a quick refinement of the last good focus step: what a
- * page asks for when its preview starts. */
+/* The same, but a refinement of the last good step: the whole range is
+ * only searched when there is no previous good focus. */
 esp_err_t app_video_refocus_cached(void) {
-  return camd_ctl_refocus(0) == 0 ? ESP_OK : ESP_FAIL;
+  if (camd_ctl_refocus(0) != 0)
+    return ESP_FAIL;
+  ae_hold_sweep = 1;
+  ae_hold_since = ae_now_ms();
+  return ESP_OK;
+}
+
+/* Hand the lens back to the sweep state machine: a fixed position set by
+ * the Focus slider is released, and a lens that has already focused stays
+ * where it is. */
+esp_err_t app_video_auto_focus(void) {
+  unsigned char cmd[1] = {'A'};
+  char reply[2] = {0};
+
+  if (camd_ctl(cmd, sizeof(cmd), reply, sizeof(reply)) != 0)
+    return ESP_FAIL;
+  ae_hold_sweep = 0;
+  ae_frames = 0;
+  return reply[0] == 'O' ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t app_video_adjust_exposure(int32_t delta) {
