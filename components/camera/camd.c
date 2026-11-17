@@ -404,6 +404,10 @@ static int sensor_write_regs(const struct imx179_reg *regs, int n)
  */
 static unsigned int idle_vts = 0;
 static int idle_after = 5;
+/* Length of the idle-loop backoff, in ms.  20 is the shipped value;
+ * larger values are an opt-in experiment and never touch the sensor
+ * stream bit, the vb2 queue or the ISP/CPP configuration. */
+static int idle_sleep_ms = 20;
 static unsigned int normal_vts = 0x09D6;
 static volatile int vts_slowed;
 static volatile time_t last_request_at;
@@ -3162,7 +3166,7 @@ static void *client_thread(void *arg)
 		/* convert to QVGA and store in latest slot */
 		{
 			const unsigned char *src_y, *src_uv;
-			void *p_y, *p_uv;
+			void *p_y = MAP_FAILED, *p_uv = MAP_FAILED;
 			size_t y_sz = (size_t)width * height;
 			size_t uv_sz = (size_t)width * height / 2;
 
@@ -3170,15 +3174,29 @@ static void *client_thread(void *arg)
 				struct timespec ts = { 0, 100 * 1000 * 1000 };
 				nanosleep(&ts, NULL);
 			}
-			p_y = mmap(NULL, y_sz, PROT_READ, MAP_SHARED,
-				   (int)bufs[buf.index], 0);
-			p_uv = mmap(NULL, uv_sz, PROT_READ, MAP_SHARED,
-				    (int)cbufs.planes[buf.index][1].m.userptr, 0);
-			if (p_y == MAP_FAILED || p_uv == MAP_FAILED) {
-				static int mfail;
-				if (mfail++ < 5)
-					printf("[client] mmap fail y=%p uv=%p errno=%d\n",
-					       p_y, p_uv, errno);
+			/*
+			 * The ION mappings are only used by the publish path.
+			 * On an idle frame they map ~1.6 MB and immediately
+			 * unmap it for nothing: do not map at all while there
+			 * is no client.  The DQBUF/requeue and the per-frame
+			 * ISP/CPP cycle below are untouched, so the queue
+			 * keeps rotating and the pipeline stays in phase;
+			 * the first request clears idle before the next frame
+			 * is served, so the fresh-frame gate still protects
+			 * the resume.
+			 */
+			if (!idle) {
+				p_y = mmap(NULL, y_sz, PROT_READ, MAP_SHARED,
+					   (int)bufs[buf.index], 0);
+				p_uv = mmap(NULL, uv_sz, PROT_READ, MAP_SHARED,
+					    (int)cbufs.planes[buf.index][1].m.userptr,
+					    0);
+				if (p_y == MAP_FAILED || p_uv == MAP_FAILED) {
+					static int mfail;
+					if (mfail++ < 5)
+						printf("[client] mmap fail y=%p uv=%p errno=%d\n",
+						       p_y, p_uv, errno);
+				}
 			}
 			int published = 0;
 			if (!idle) {
@@ -4068,7 +4086,9 @@ proc_done:
 		 * it.
 		 */
 		if (idle > 3) {
-			struct timespec ts = { 0, 20 * 1000 * 1000 };
+			struct timespec ts;
+			ts.tv_sec = idle_sleep_ms / 1000;
+			ts.tv_nsec = (long)(idle_sleep_ms % 1000) * 1000000L;
 			nanosleep(&ts, NULL);
 		}
 		p7 = now_ns();
@@ -4653,9 +4673,10 @@ int main(int argc, char **argv)
 	}
 	idle_vts = state_read_persist("idle_vts", 0, 0, 0xFFFF);
 	idle_after = state_read_persist("idle_after", 5, 0, 3600);
+	idle_sleep_ms = state_read_persist("idle_sleep_ms", 20, 1, 1000);
 	last_request_at = time(NULL);
-	printf("[stream] idle VTS 0x%04x after %ds (0 disables)\n",
-	       idle_vts, idle_after);
+	printf("[stream] idle VTS 0x%04x after %ds (0 disables), idle sleep %d ms\n",
+	       idle_vts, idle_after, idle_sleep_ms);
 	/*
 	 * The sensor mode is a persistent knob: 0 = the binned 1640x1232
 	 * mode, 1 = the full 3280x2464 mode.  The vendor's preview is a
