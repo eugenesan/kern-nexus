@@ -177,9 +177,26 @@ int kern_camera_launch(void)
 	pid_t pid;
 	char *const argv[] = { (char *)"kern-nexus", (char *)"--camd", NULL };
 
-	/* Reap any previous quiesced child before spawning another. */
+	/* If a previous child is still quiescing, wait for it to exit before
+	 * forking a replacement.  Otherwise two camds can fight over the
+	 * ISP, or the new client can attach to a dying socket. */
+	if (kern_camera_child_pid > 0) {
+		int tries;
+		for (tries = 0; tries < 200; tries++) {
+			if (waitpid(kern_camera_child_pid, NULL, WNOHANG) ==
+			    kern_camera_child_pid)
+				break;
+			if (waitpid(kern_camera_child_pid, NULL, WNOHANG) < 0)
+				break;
+			usleep(10000);
+		}
+		kern_camera_child_pid = 0;
+	}
 	while (waitpid(-1, NULL, WNOHANG) > 0)
 		;
+	/* The kernel's VFE/CPP release is asynchronous to the process exit.
+	 * Give it time to settle before cold-starting a new pipeline. */
+	usleep(1000000);
 	pid = fork();
 	if (pid < 0)
 		return -1;

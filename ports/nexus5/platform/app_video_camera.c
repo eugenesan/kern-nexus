@@ -642,7 +642,12 @@ esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
    * are stale.  Re-launch it on the first camera page.  The lock makes
    * sure only one page can decide to spawn. */
   {
-    int probe = connect_camd();
+    int probe;
+    /* If the child is in its quiesce grace window, removing the marker
+     * cancels the teardown and keeps the existing stream alive. */
+    if (access("/data/kern/camd_quiescing", F_OK) == 0)
+      unlink("/data/kern/camd_quiescing");
+    probe = connect_camd();
     if (probe < 0) {
       unlink(CAMD_SOCK);
       unlink(CAMD_CTL_SOCK);

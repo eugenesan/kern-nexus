@@ -4500,6 +4500,29 @@ static void kern_camera_quiesce(void)
 	struct msm_vfe_axi_stream_release_cmd srel;
 
 	kern_camera_log("[camera] quiesce begin h=%u\n", isp_stream_handle);
+	{
+		int mf = open("/data/kern/camd_quiescing",
+			      O_WRONLY | O_CREAT | O_TRUNC, 0600);
+		if (mf >= 0) close(mf);
+	}
+	/* Grace window: a camera page opened during this time removes the
+	 * marker, which cancels the quiesce entirely.  Avoids a pipeline
+	 * restart (and the out-of-phase frames that follow one). */
+	{
+		int i;
+		for (i = 0; i < 150; i++) {
+			if (access("/data/kern/camd_quiescing", F_OK) != 0) {
+				kern_camera_log("[camera] quiesce cancelled\n");
+				quiescing = 0;
+				/* Give the returning client a full idle window
+				 * to connect and start requesting frames. */
+				last_request_at = time(NULL);
+				frame_requests++;
+				return;
+			}
+			usleep(100000);
+		}
+	}
 	cklog("[QUIESCE] entry h=%u capture_fd=%d\n", isp_stream_handle,
 	      kern_capture_fd);
 	memset(&ccmd, 0, sizeof(ccmd));
@@ -4530,6 +4553,10 @@ static void kern_camera_quiesce(void)
 	/* The child's ring is private to this process; persist it before
 	 * _exit so the lifecycle trace survives the respawn. */
 	kern_camera_log_write("/data/local/tmp/kern-camera-child.log");
+	/* Make a quick re-open see a dead socket instead of connecting to a
+	 * child that is about to exit. */
+	unlink("/data/kern/camd.sock");
+	unlink("/data/kern/camd-ctl.sock");
 	_exit(0);
 }
 #endif
@@ -4690,6 +4717,7 @@ int main(int argc, char **argv)
 #endif
 #ifdef KERN_CAMERA_IN_PROCESS
 	kern_camera_log("[camera] camd_main entered\n");
+	unlink("/data/kern/camd_quiescing");
 #endif
 
 	setvbuf(stdout, NULL, _IONBF, 0);
