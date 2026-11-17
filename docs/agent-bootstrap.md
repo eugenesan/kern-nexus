@@ -81,6 +81,14 @@ This project ran a long hardware bring-up.  The context needed to continue
 is in these documents, not in the old transcript; the transcript contains
 experiments and dead ends (deliberately kept out of the docs).
 
+## Focused follow-up session
+
+For the camera stream stop/restart experiment, use
+[preface-camera-stream-experiment.md](preface-camera-stream-experiment.md)
+instead of pasting this file: it repeats the rules here, adds device/root
+and partition-safety rules, and defines the experiment as an isolated
+side branch of the operational project.
+
 ## What a new session must not have to rediscover
 
 * The camera quirks that cost the most time are written down in

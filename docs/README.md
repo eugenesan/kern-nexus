@@ -6,6 +6,7 @@ Start with the blueprint; it is the overview and the coding-agent brief.
 |---|---|
 | [status.md](status.md) | **read first**: what works today, known gaps, decisions, next tasks |
 | [agent-bootstrap.md](agent-bootstrap.md) | the prompt for a new session (rules, layout, device loop, first tasks) |
+| [preface-camera-stream-experiment.md](preface-camera-stream-experiment.md) | paste into a focused session doing the camd stop/restart side experiment (device/root rules, isolation, verification) |
 | [kern-nexus-blueprint.md](kern-nexus-blueprint.md) | target, architecture, boot modes, port layout, ordered work |
 | [build-and-deploy.md](build-and-deploy.md) | toolchain, kernel/Kern builds, LVGL/mbedTLS, ramdisk/image, TWRP modes, flash/deploy |
 | [hardware.md](hardware.md) | measured nodes and wiring: display/input/power, camera, NFC, UART, air gap |
