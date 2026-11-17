@@ -47,6 +47,10 @@ kernel, ramdisk, images and docs live outside it.
   `main/pages/seedkeeper/*`, `main/pages/capture_entropy.c`, settings,
   `components/video/video.h`.
 * `rootfs/`, `scripts/`, `tools/`, `linux/` — boot, build, host tools.
+* `components/camera/re/` — **git-ignored local archive** of camera RE
+  history, captures, logs and tools (start with its `README.md` and
+  `STREAM-RESTART.md`).  Not part of the build; read it before changing
+  the camera stream lifecycle.
 
 **Device and test loop**
 
