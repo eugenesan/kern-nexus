@@ -64,6 +64,10 @@
 /* Serial-visible trace for the quiesce/respawn experiment. */
 static void cklog(const char *fmt, ...)
 {
+#ifndef KERN_CAMERA_TRACE
+	(void)fmt;
+	return;
+#else
 	int fd = open("/dev/kmsg", O_WRONLY | O_APPEND);
 	int tf = open("/data/local/tmp/respawn-trace.log",
 		       O_WRONLY | O_APPEND | O_CREAT, 0600);
@@ -74,6 +78,7 @@ static void cklog(const char *fmt, ...)
 	va_end(ap);
 	if (fd >= 0) { write(fd, buf, strlen(buf)); close(fd); }
 	if (tf >= 0) { write(tf, buf, strlen(buf)); close(tf); }
+#endif
 }
 #endif
 #include "v4l2_caf.h"
@@ -4482,7 +4487,12 @@ static void *socket_thread(void *arg)
  * the control thread of the camera child. */
 static void kern_camera_quiesce(void)
 {
+	static volatile int quiescing;
 	unsigned int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+
+	if (quiescing)
+		return;
+	quiescing = 1;
 	struct msm_vfe_axi_stream_cfg_cmd ccmd;
 	struct msm_isp_buf_request brel;
 	struct msm_vfe_axi_stream_release_cmd srel;

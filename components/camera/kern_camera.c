@@ -42,14 +42,17 @@ int kern_camera_log(const char *fmt, ...)
 const char *kern_camera_log_line(int index)
 {
 	const char *line = NULL;
+	int count;
 
-	if (index < 0 || index >= kern_camera_ring_count)
-		return NULL;
 	pthread_mutex_lock(&kern_camera_log_lock);
-	/* Entry 0 is the oldest retained line. */
-	int start = kern_camera_ring_count == KERN_CAMERA_LOG_ENTRIES
-			? kern_camera_ring_next : 0;
-	line = kern_camera_ring[(start + index) % KERN_CAMERA_LOG_ENTRIES];
+	count = kern_camera_ring_count;
+	if (index >= 0 && index < count) {
+		/* Entry 0 is the oldest retained line. */
+		int start = count == KERN_CAMERA_LOG_ENTRIES
+				? kern_camera_ring_next : 0;
+		line = kern_camera_ring[(start + index) %
+					KERN_CAMERA_LOG_ENTRIES];
+	}
 	pthread_mutex_unlock(&kern_camera_log_lock);
 	return line;
 }
@@ -66,11 +69,15 @@ int kern_camera_log_count(void)
  * it does not change the camera configuration. */
 static void klog_line(const char *msg)
 {
+#ifndef KERN_CAMERA_TRACE
+	(void)msg;
+#else
 	int fd = open("/dev/kmsg", O_WRONLY | O_APPEND);
 	int tf = open("/data/local/tmp/respawn-trace.log",
 		       O_WRONLY | O_APPEND | O_CREAT, 0600);
 	if (fd >= 0) { write(fd, msg, strlen(msg)); close(fd); }
 	if (tf >= 0) { write(tf, msg, strlen(msg)); close(tf); }
+#endif
 }
 
 /* Entry point for the exec'd camera child.  The child process image is a
@@ -108,7 +115,8 @@ int kern_camera_launch(void)
 	char *const argv[] = { (char *)"kern-nexus", (char *)"--camd", NULL };
 
 	/* Reap any previous quiesced child before spawning another. */
-	waitpid(-1, NULL, WNOHANG);
+	while (waitpid(-1, NULL, WNOHANG) > 0)
+		;
 	pid = fork();
 	if (pid < 0)
 		return -1;

@@ -34,6 +34,7 @@
 #define CAMD_BUNDLED "/opt/kern/camd"
 #define CAMD_PID_FILE "/tmp/kern-camd.pid"
 
+static pthread_mutex_t s_video_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t s_thread;
 static volatile int s_stop;
 static volatile int s_running;
@@ -633,30 +634,38 @@ bool app_video_is_ready(void) { return s_started || access(CAMD_SOCK, F_OK) == 0
 
 esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
   (void)core_id;
+  esp_err_t e;
+
+  pthread_mutex_lock(&s_video_lock);
+#ifdef KERN_CAMERA_IN_PROCESS
   /* If the camera child quiesced after an idle period, the socket files
-   * are stale.  Re-launch it on the first camera page.  No-op while the
-   * child is still running (the default: idle_stop_after == 0). */
+   * are stale.  Re-launch it on the first camera page.  The lock makes
+   * sure only one page can decide to spawn. */
   {
     int probe = connect_camd();
     if (probe < 0) {
       unlink(CAMD_SOCK);
       unlink(CAMD_CTL_SOCK);
       s_started = 0;
-      esp_err_t e = app_video_init_once(0);
+      e = app_video_init_once(0);
       if (e != ESP_OK) {
         klog("kern-nexus camera: camera respawn failed: %d\n", e);
+        pthread_mutex_unlock(&s_video_lock);
         return e;
       }
     } else {
       close(probe);
     }
   }
+#endif
   if (!app_video_is_ready()) {
     klog("kern-nexus camera: start refused, not ready\n");
+    pthread_mutex_unlock(&s_video_lock);
     return ESP_ERR_INVALID_STATE;
   }
   if (s_running) {
     klog("kern-nexus camera: start while already running\n");
+    pthread_mutex_unlock(&s_video_lock);
     return ESP_OK;
   }
   s_cb = cb;
@@ -664,17 +673,22 @@ esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
   ae_start();
   if (pthread_create(&s_thread, NULL, camera_thread, NULL) != 0) {
     klog("kern-nexus camera: pthread_create failed\n");
+    pthread_mutex_unlock(&s_video_lock);
     return ESP_FAIL;
   }
   s_running = 1;
   klog("kern-nexus camera: thread created\n");
+  pthread_mutex_unlock(&s_video_lock);
   return ESP_OK;
 }
 
 esp_err_t app_video_stop(void) {
+  pthread_mutex_lock(&s_video_lock);
   klog("kern-nexus camera: stop (running=%d)\n", s_running);
-  if (!s_running)
+  if (!s_running) {
+    pthread_mutex_unlock(&s_video_lock);
     return ESP_OK;
+  }
   s_stop = 1;
   if (s_sock >= 0) {
     shutdown(s_sock, SHUT_RDWR);
@@ -684,6 +698,7 @@ esp_err_t app_video_stop(void) {
   pthread_join(s_thread, NULL);
   s_running = 0;
   s_cb = NULL;
+  pthread_mutex_unlock(&s_video_lock);
   return ESP_OK;
 }
 

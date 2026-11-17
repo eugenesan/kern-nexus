@@ -37,8 +37,10 @@ Default **OFF**. With it ON:
   (`KERN_CAMERA_LOG_ENTRIES=128`, `KERN_CAMERA_LOG_LINE=160`) and
   `kern_camera_launch()`.
 * `app_video_init_once()` in
-  `ports/nexus5/platform/app_video_camera.c` launches camd on a dedicated
-  thread instead of `fork()/execl()` of `/opt/kern/camd`.
+  `ports/nexus5/platform/app_video_camera.c` launches the camera as a
+  `fork()`+`execv("/proc/self/exe", "--camd")` child of the single binary
+  instead of `fork()/execl()` of `/opt/kern/camd`. No separate daemon
+  binary is used. `app_video_start()` respawns the child if it exited.
 * `components/camera/isp.h` gained
   `struct msm_vfe_axi_stream_release_cmd`; the generated camera-config
   headers now share a `KERN_CAM_UPLOAD_DEFINED` guard so `camd.c` can be
@@ -56,7 +58,8 @@ Image: audit build with `KERN_CAMERA_IN_PROCESS=ON`, kernel
 `airgap/cam-xz-wipe-kern` (CPP guard in-tree), `fastboot boot` only.
 Host suites (`scripts/test.sh`) pass with the flag both OFF and ON.
 
-* `ps` shows only `kern-nexus` — no separate camd process; both
+* `ps` shows two `kern-nexus` processes: the signer parent and the
+  exec'd camera child (no separate `/opt/kern/camd`); both
   `/data/kern/camd.sock` and `camd-ctl.sock` are created.
 * Frame socket returns a fresh 960x1280 frame; `q` snapshot
   `exp=0x09c4 gain=0x00e0 luma=1`.
