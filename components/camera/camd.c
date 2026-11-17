@@ -1589,6 +1589,11 @@ static volatile int cpp_input_index = 0;
  * moving, the capture thread skips the expensive downscale/AF work so an
  * idle camera page does not keep a core busy. */
 static volatile unsigned frame_requests;
+#ifdef KERN_CAMERA_IN_PROCESS
+static int kern_capture_fd = -1;   /* capture node fd, for quiesce */
+static int idle_stop_after;        /* seconds; 0 disables (shipped default) */
+static void kern_camera_quiesce(void);
+#endif
 /* The ISP consumes capture buffers in the order they were queued, so the
  * buffer it is about to fill is the head of this FIFO.  Guessing from the
  * last dequeue instead made every other frame read an unwritten buffer. */
@@ -2719,6 +2724,9 @@ static void *client_thread(void *arg)
 		printf("[client] open %s: %s\n", cam->sensor_node, strerror(errno));
 		return NULL;
 	}
+#ifdef KERN_CAMERA_IN_PROCESS
+	kern_capture_fd = fd;
+#endif
 	printf("[client] open %s SUCCEEDED -- the handshake completed\n",
 	       cam->sensor_node);
 	fflush(stdout);
@@ -2896,6 +2904,15 @@ static void *client_thread(void *arg)
 				idle = 0;
 			}
 		}
+#ifdef KERN_CAMERA_IN_PROCESS
+		/* Full quiesce after a long idle period.  The camera child
+		 * exits; the kern parent respawns it on the next camera page.
+		 * Default-off: idle_stop_after == 0 leaves the shipped
+		 * continuous-stream behaviour untouched. */
+		if (idle_stop_after > 0 && idle > 3 &&
+		    time(NULL) - last_request_at >= idle_stop_after)
+			kern_camera_quiesce();
+#endif
 		/*
 		 * No request for a while: stretch the frame to the slowest
 		 * the sensor can produce.  Nothing else changes -- the
@@ -4433,6 +4450,40 @@ static void *socket_thread(void *arg)
  * socket is held open by the firmware for the whole session, so a host
  * client that connects to it would block in accept().  This socket only
  * sets the same flags and returns immediately. */
+#ifdef KERN_CAMERA_IN_PROCESS
+/* Full pipeline teardown, then exit the camera child.  The kern parent
+ * respawns a fresh child on the next camera request.  All ioctls stay on
+ * the control thread of the camera child. */
+static void kern_camera_quiesce(void)
+{
+	unsigned int type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	struct msm_vfe_axi_stream_cfg_cmd ccmd;
+	struct msm_isp_buf_request brel;
+	struct msm_vfe_axi_stream_release_cmd srel;
+
+	memset(&ccmd, 0, sizeof(ccmd));
+	ccmd.num_streams = 1;
+	ccmd.stream_handle[0] = isp_stream_handle;
+	ccmd.cmd = STOP_STREAM;
+	ioctl(isp_fd, VIDIOC_MSM_ISP_CFG_STREAM, &ccmd);
+	if (kern_capture_fd >= 0)
+		ioctl(kern_capture_fd, VIDIOC_STREAMOFF, &type);
+	sensor_write_regs(stream_off_regs, 1);
+
+	memset(&brel, 0, sizeof(brel));
+	brel.handle = isp_buf_handle;
+	brel.buf_type = ISP_SHARE_BUF;
+	ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_BUF, &brel);
+
+	memset(&srel, 0, sizeof(srel));
+	srel.stream_handle = isp_stream_handle;
+	ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_STREAM, &srel);
+
+	kern_camera_log("camera child: quiesced, exiting\n");
+	_exit(0);
+}
+#endif
+
 static void *ctl_thread(void *arg)
 {
 	int sfd, cfd;
@@ -4549,6 +4600,11 @@ static void *ctl_thread(void *arg)
 				printf("[af] cached refocus request (ctl)\n");
 				refocus_full = 0;
 				refocus_request = 1;
+				write(cfd, "OK", 2);
+			} else if (c == '0') {
+#ifdef KERN_CAMERA_IN_PROCESS
+				kern_camera_quiesce();
+#endif
 				write(cfd, "OK", 2);
 			} else if (c == 'C') {
 				/* A QR retry: the rectangle is in preview
@@ -4678,6 +4734,10 @@ int main(int argc, char **argv)
 		isp_stream_src = PIX_VIEWFINDER;
 		printf("[mode] ISP stream: PIX_VIEWFINDER (processed)\n");
 	}
+#ifdef KERN_CAMERA_IN_PROCESS
+	idle_stop_after = state_read_persist("idle_stop_after", 0, 0, 3600);
+	printf("[stream] idle stop after %ds (0 disables)\n", idle_stop_after);
+#endif
 	idle_vts = state_read_persist("idle_vts", 0, 0, 0xFFFF);
 	idle_after = state_read_persist("idle_after", 5, 0, 3600);
 	idle_sleep_ms = state_read_persist("idle_sleep_ms", 20, 1, 1000);

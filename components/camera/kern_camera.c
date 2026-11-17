@@ -10,6 +10,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static pthread_mutex_t kern_camera_log_lock = PTHREAD_MUTEX_INITIALIZER;
 static char kern_camera_ring[KERN_CAMERA_LOG_ENTRIES][KERN_CAMERA_LOG_LINE];
@@ -81,13 +83,28 @@ static void *kern_camera_thread(void *arg)
 	return NULL;
 }
 
+/* The camera runs as a child of the *same* kern binary.  This keeps the
+ * single-binary delivery while giving the camera its own address space:
+ * a full pipeline teardown can exit the child, which is the only sequence
+ * proven to leave the 3.4 kernel's ISP/CPP/write-master state clean for a
+ * cold init (see components/camera/re/EXPERIMENT-2026-11-16.md). */
+static pid_t kern_camera_child_pid;
+
 int kern_camera_launch(void)
 {
-	pthread_t thread;
+	pid_t pid;
 
-	if (pthread_create(&thread, NULL, kern_camera_thread, NULL) != 0)
+	/* Reap any previous quiesced child before spawning another. */
+	waitpid(-1, NULL, WNOHANG);
+	pid = fork();
+	if (pid < 0)
 		return -1;
-	pthread_detach(thread);
+	if (pid == 0) {
+		kern_camera_thread(NULL);
+		_exit(0);
+	}
+	kern_camera_child_pid = pid;
+	kern_camera_log("kern_camera: forked camera child pid=%d\n", pid);
 	return 0;
 }
 
