@@ -73,7 +73,10 @@ static void klog_line(const char *msg)
 	if (tf >= 0) { write(tf, msg, strlen(msg)); close(tf); }
 }
 
-static void *kern_camera_thread(void *arg)
+/* Entry point for the exec'd camera child.  The child process image is a
+ * fresh copy of this binary invoked as "kern-nexus --camd", so camd's
+ * globals start zeroed on every quiesce/respawn cycle. */
+int kern_camera_run_child(void)
 {
 	char *argv[] = {
 		(char *)"camd",
@@ -87,23 +90,22 @@ static void *kern_camera_thread(void *arg)
 		(char *)"1", (char *)"0xffffffff", (char *)"0",
 		(char *)"0", (char *)"0", (char *)"1", (char *)"0",
 	};
-	(void)arg;
-	klog_line("[SPAWN] child: camd_main start\n");
+
+	klog_line("[SPAWN] child: camd_main start (exec'd)\n");
 	camd_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
 	klog_line("[SPAWN] child: camd_main returned\n");
-	return NULL;
+	return 0;
 }
 
-/* The camera runs as a child of the *same* kern binary.  This keeps the
- * single-binary delivery while giving the camera its own address space:
- * a full pipeline teardown can exit the child, which is the only sequence
- * proven to leave the 3.4 kernel's ISP/CPP/write-master state clean for a
- * cold init (see components/camera/re/EXPERIMENT-2026-11-16.md). */
+/* Fork + exec of /proc/self/exe.  Between fork() and execv() the child
+ * calls only async-signal-safe functions (execv, write, _exit), which is
+ * the POSIX-safe way to spawn from a multithreaded process. */
 static pid_t kern_camera_child_pid;
 
 int kern_camera_launch(void)
 {
 	pid_t pid;
+	char *const argv[] = { (char *)"kern-nexus", (char *)"--camd", NULL };
 
 	/* Reap any previous quiesced child before spawning another. */
 	waitpid(-1, NULL, WNOHANG);
@@ -111,13 +113,13 @@ int kern_camera_launch(void)
 	if (pid < 0)
 		return -1;
 	if (pid == 0) {
-		kern_camera_thread(NULL);
-		_exit(0);
+		execv("/proc/self/exe", argv);
+		_exit(127);
 	}
 	kern_camera_child_pid = pid;
 	{
 		char b[96];
-		snprintf(b, sizeof(b), "[SPAWN] parent forked child pid=%d\n", pid);
+		snprintf(b, sizeof(b), "[SPAWN] parent exec'd child pid=%d\n", pid);
 		klog_line(b);
 	}
 	return 0;

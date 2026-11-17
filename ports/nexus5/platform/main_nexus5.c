@@ -11,6 +11,10 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <string.h>
+#ifdef KERN_CAMERA_IN_PROCESS
+#include "kern_camera.h"
+#endif
 
 #include "esp_lvgl_port.h"
 #include "esp_log.h"
@@ -32,8 +36,15 @@ static void prepare_tmpfs_paths(void) {
 }
 
 int main(int argc, char **argv) {
+#ifdef KERN_CAMERA_IN_PROCESS
+  /* Camera child mode: exec'd by kern_camera_launch().  Do this before
+   * any kern/NVS/LVGL setup so the child runs camd from a clean image. */
+  if (argc > 1 && strcmp(argv[1], "--camd") == 0)
+    return kern_camera_run_child();
+#else
   (void)argc;
   (void)argv;
+#endif
 
   umask(077);
   (void)mlockall(MCL_CURRENT | MCL_FUTURE);

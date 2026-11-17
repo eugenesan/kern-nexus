@@ -17,11 +17,13 @@
 extern "C" {
 #endif
 
-/* Stage 1: run camd's entry point on a dedicated camera thread.  Returns 0
- * when the thread was created; the sockets appear asynchronously, exactly
- * as with the external daemon.  Only available in in-process builds. */
+/* Stage 1 + respawn hardening: the single binary runs camd in a child
+ * process started with fork()+execv("/proc/self/exe", ..., "--camd").
+ * Launch returns 0 when the child was created; sockets appear
+ * asynchronously, exactly as with the external daemon. */
 #ifdef KERN_CAMERA_IN_PROCESS
 int kern_camera_launch(void);
+int kern_camera_run_child(void);
 int camd_main(int argc, char **argv);
 #endif
 
