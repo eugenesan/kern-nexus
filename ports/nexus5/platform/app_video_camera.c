@@ -633,6 +633,24 @@ bool app_video_is_ready(void) { return s_started || access(CAMD_SOCK, F_OK) == 0
 
 esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
   (void)core_id;
+  /* If the camera child quiesced after an idle period, the socket files
+   * are stale.  Re-launch it on the first camera page.  No-op while the
+   * child is still running (the default: idle_stop_after == 0). */
+  {
+    int probe = connect_camd();
+    if (probe < 0) {
+      unlink(CAMD_SOCK);
+      unlink(CAMD_CTL_SOCK);
+      s_started = 0;
+      esp_err_t e = app_video_init_once(0);
+      if (e != ESP_OK) {
+        klog("kern-nexus camera: camera respawn failed: %d\n", e);
+        return e;
+      }
+    } else {
+      close(probe);
+    }
+  }
   if (!app_video_is_ready()) {
     klog("kern-nexus camera: start refused, not ready\n");
     return ESP_ERR_INVALID_STATE;

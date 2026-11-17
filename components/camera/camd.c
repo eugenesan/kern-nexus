@@ -60,6 +60,21 @@
 /* In-process build: printf is redirected to the bounded log ring and
  * main() is renamed to camd_main by the build system. */
 #include "kern_camera.h"
+#include <stdarg.h>
+/* Serial-visible trace for the quiesce/respawn experiment. */
+static void cklog(const char *fmt, ...)
+{
+	int fd = open("/dev/kmsg", O_WRONLY | O_APPEND);
+	int tf = open("/data/local/tmp/respawn-trace.log",
+		       O_WRONLY | O_APPEND | O_CREAT, 0600);
+	char buf[256];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+	if (fd >= 0) { write(fd, buf, strlen(buf)); close(fd); }
+	if (tf >= 0) { write(tf, buf, strlen(buf)); close(tf); }
+}
 #endif
 #include "v4l2_caf.h"
 #include "imx179_regs.h"
@@ -4226,6 +4241,7 @@ static void *socket_thread(void *arg)
 		if (cfd < 0) continue;
 #ifdef KERN_CAMERA_IN_PROCESS
 		cam_clients++;
+		cklog("[SOCK] client connect fd=%d count=%d\n", cfd, cam_clients);
 #endif
 		for (;;) {
 			int r = read(cfd, buf, 1);
@@ -4449,6 +4465,7 @@ static void *socket_thread(void *arg)
 #ifdef KERN_CAMERA_IN_PROCESS
 		if (cam_clients > 0)
 			cam_clients--;
+		cklog("[SOCK] client close count=%d\n", cam_clients);
 #endif
 		close(cfd);
 	}
@@ -4470,24 +4487,32 @@ static void kern_camera_quiesce(void)
 	struct msm_isp_buf_request brel;
 	struct msm_vfe_axi_stream_release_cmd srel;
 
+	cklog("[QUIESCE] entry h=%u capture_fd=%d\n", isp_stream_handle,
+	      kern_capture_fd);
 	memset(&ccmd, 0, sizeof(ccmd));
 	ccmd.num_streams = 1;
 	ccmd.stream_handle[0] = isp_stream_handle;
 	ccmd.cmd = STOP_STREAM;
-	ioctl(isp_fd, VIDIOC_MSM_ISP_CFG_STREAM, &ccmd);
+	cklog("[QUIESCE] CFG_STREAM rc=%d\n",
+	      ioctl(isp_fd, VIDIOC_MSM_ISP_CFG_STREAM, &ccmd));
 	if (kern_capture_fd >= 0)
-		ioctl(kern_capture_fd, VIDIOC_STREAMOFF, &type);
+		cklog("[QUIESCE] STREAMOFF rc=%d\n",
+		      ioctl(kern_capture_fd, VIDIOC_STREAMOFF, &type));
 	sensor_write_regs(stream_off_regs, 1);
+	cklog("[QUIESCE] sensor off done\n");
 
 	memset(&brel, 0, sizeof(brel));
 	brel.handle = isp_buf_handle;
 	brel.buf_type = ISP_SHARE_BUF;
-	ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_BUF, &brel);
+	cklog("[QUIESCE] RELEASE_BUF rc=%d\n",
+	      ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_BUF, &brel));
 
 	memset(&srel, 0, sizeof(srel));
 	srel.stream_handle = isp_stream_handle;
-	ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_STREAM, &srel);
+	cklog("[QUIESCE] RELEASE_STREAM rc=%d\n",
+	      ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_STREAM, &srel));
 
+	cklog("[QUIESCE] complete, exiting\n");
 	kern_camera_log("camera child: quiesced, exiting\n");
 	_exit(0);
 }

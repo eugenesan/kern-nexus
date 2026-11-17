@@ -7,6 +7,7 @@
 #include "kern_camera.h"
 
 #include <pthread.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -63,6 +64,15 @@ int kern_camera_log_count(void)
 /* The benchmark command line used by app_video_init_once for the external
  * daemon.  Keep it byte-identical: Stage 1 only moves the process boundary,
  * it does not change the camera configuration. */
+static void klog_line(const char *msg)
+{
+	int fd = open("/dev/kmsg", O_WRONLY | O_APPEND);
+	int tf = open("/data/local/tmp/respawn-trace.log",
+		       O_WRONLY | O_APPEND | O_CREAT, 0600);
+	if (fd >= 0) { write(fd, msg, strlen(msg)); close(fd); }
+	if (tf >= 0) { write(tf, msg, strlen(msg)); close(tf); }
+}
+
 static void *kern_camera_thread(void *arg)
 {
 	char *argv[] = {
@@ -78,8 +88,9 @@ static void *kern_camera_thread(void *arg)
 		(char *)"0", (char *)"0", (char *)"1", (char *)"0",
 	};
 	(void)arg;
-	kern_camera_log("kern_camera: camd_main on dedicated thread\n");
+	klog_line("[SPAWN] child: camd_main start\n");
 	camd_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
+	klog_line("[SPAWN] child: camd_main returned\n");
 	return NULL;
 }
 
@@ -104,7 +115,11 @@ int kern_camera_launch(void)
 		_exit(0);
 	}
 	kern_camera_child_pid = pid;
-	kern_camera_log("kern_camera: forked camera child pid=%d\n", pid);
+	{
+		char b[96];
+		snprintf(b, sizeof(b), "[SPAWN] parent forked child pid=%d\n", pid);
+		klog_line(b);
+	}
 	return 0;
 }
 
