@@ -47,3 +47,11 @@ The full hardware contract and pitfalls are in
 Build the component as part of `ports/nexus5` only after the refactor; the
 current `app_video_camera.c` is a safe stub (`ESP_ERR_NOT_SUPPORTED`) so
 the rest of the UI can link.
+
+## In-process seam (Stage 0, experimental)
+
+`kern_camera.c/.h` is an inert bounded log ring and the seam for folding
+camd into kern.  It is compiled into every build but has no runtime effect.
+`KERN_CAMERA_IN_PROCESS` (`ports/nexus5/CMakeLists.txt`) is default OFF;
+the standalone `/opt/kern/camd` remains the shipped behaviour.  See
+`re/INTEGRATION-PLAN-2026-11-17.md` for the staged plan.

@@ -4,6 +4,13 @@ project(kern_nexus C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+# Experimental: compile camd into the kern binary instead of spawning the
+# standalone daemon.  Default OFF; the external daemon remains the shipped
+# behaviour.  Stage 0 only adds the flag and the shim/log ring, so enabling
+# it does not yet change any runtime path.
+option(KERN_CAMERA_IN_PROCESS
+       "Fold camd into kern (experimental, default OFF)" OFF)
+
 set(KERN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../kern")
 set(PORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(SIM_PLATFORM "${KERN_DIR}/simulator/platform")
@@ -198,6 +205,7 @@ target_compile_definitions(kern-nexus PRIVATE
     WALLY_ABI_NO_ELEMENTS
     BUILD_MINIMAL=1
     BUILD_STANDARD_SECP=1
+    $<$<BOOL:${KERN_CAMERA_IN_PROCESS}>:KERN_CAMERA_IN_PROCESS=1>
     ECMULT_WINDOW_SIZE=8
     # Linux 3.4 has no getrandom(2).
     HAVE_GETRANDOM=0
