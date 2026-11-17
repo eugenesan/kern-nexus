@@ -23,6 +23,8 @@ int kern_camera_log(const char *fmt, ...)
 {
 	va_list ap;
 	int slot, written;
+	char line[KERN_CAMERA_LOG_LINE];
+	int fd;
 
 	pthread_mutex_lock(&kern_camera_log_lock);
 	slot = kern_camera_ring_next;
@@ -33,9 +35,19 @@ int kern_camera_log(const char *fmt, ...)
 	pthread_mutex_unlock(&kern_camera_log_lock);
 
 	va_start(ap, fmt);
-	written = vsnprintf(kern_camera_ring[slot], KERN_CAMERA_LOG_LINE,
-			    fmt, ap);
+	written = vsnprintf(line, sizeof(line), fmt, ap);
 	va_end(ap);
+	snprintf(kern_camera_ring[slot], KERN_CAMERA_LOG_LINE, "%s", line);
+
+	/* Append to a shared file so logs from the exec'd camera child
+	 * survive its exit; the in-memory ring only lives in one process. */
+	fd = open("/data/local/tmp/kern-camera-runtime.log",
+		  O_WRONLY | O_APPEND | O_CREAT, 0600);
+	if (fd >= 0) {
+		if (write(fd, line, strlen(line)) != (ssize_t)strlen(line))
+			(void)0;
+		close(fd);
+	}
 	return written;
 }
 
@@ -60,6 +72,56 @@ const char *kern_camera_log_line(int index)
 int kern_camera_log_count(void)
 {
 	return kern_camera_ring_count;
+}
+
+void kern_camera_log_write(const char *path)
+{
+	FILE *out = fopen(path, "w");
+	int i, count;
+
+	if (!out)
+		return;
+	pthread_mutex_lock(&kern_camera_log_lock);
+	count = kern_camera_ring_count;
+	fprintf(out, "camera log ring: %d line(s)\n", count);
+	for (i = 0; i < count; i++) {
+		int slot = count == KERN_CAMERA_LOG_ENTRIES
+				? kern_camera_ring_next + i
+				: i;
+		fprintf(out, "%03d %s\n", i,
+			kern_camera_ring[slot % KERN_CAMERA_LOG_ENTRIES]);
+	}
+	pthread_mutex_unlock(&kern_camera_log_lock);
+	fclose(out);
+}
+
+void kern_camera_log_poll_dump(void)
+{
+	static time_t last_check;
+
+	if (time(NULL) == last_check)
+		return;
+	last_check = time(NULL);
+	if (access("/data/kern/camera_log_dump", F_OK) != 0)
+		return;
+	/* Consume the trigger first so repeated polls cannot dump twice. */
+	unlink("/data/kern/camera_log_dump");
+	kern_camera_log_write("/data/local/tmp/kern-camera.log");
+	/* Include the shared runtime log, which also holds lines written by
+	 * exec'd camera children that have since exited. */
+	{
+		FILE *in = fopen("/data/local/tmp/kern-camera-runtime.log", "r");
+		if (in) {
+			FILE *out = fopen("/data/local/tmp/kern-camera.log", "a");
+			char buf[KERN_CAMERA_LOG_LINE];
+			if (out) {
+				while (fgets(buf, sizeof(buf), in))
+					fputs(buf, out);
+				fclose(out);
+			}
+			fclose(in);
+		}
+	}
 }
 
 #ifdef KERN_CAMERA_IN_PROCESS
@@ -99,6 +161,7 @@ int kern_camera_run_child(void)
 	};
 
 	klog_line("[SPAWN] child: camd_main start (exec'd)\n");
+	kern_camera_log("[camera] child exec start\n");
 	camd_main((int)(sizeof(argv) / sizeof(argv[0])), argv);
 	klog_line("[SPAWN] child: camd_main returned\n");
 	return 0;

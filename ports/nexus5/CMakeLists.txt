@@ -125,9 +125,12 @@ if(KERN_CAMERA_IN_PROCESS)
   # to the bounded log ring instead of stdout (which is /dev/null when
   # started from the recovery service).
   list(APPEND CAMERA_SOURCES "${PORT_DIR}/../../components/camera/camd.c")
+  # Only rename main().  Do NOT define printf=kern_camera_log: GCC then
+  # treats kern_camera_log as the printf builtin and optimizes the calls
+  # away.  Lifecycle logging uses explicit kern_camera_log() calls.
   set_source_files_properties(
     "${PORT_DIR}/../../components/camera/camd.c"
-    PROPERTIES COMPILE_DEFINITIONS "main=camd_main;printf=kern_camera_log")
+    PROPERTIES COMPILE_DEFINITIONS "main=camd_main")
 endif()
 file(GLOB NFC_SOURCES "${PORT_DIR}/../../components/nfc/*.c")
 file(GLOB SEEDKEEPER_SOURCES "${PORT_DIR}/../../components/seedkeeper/*.c")

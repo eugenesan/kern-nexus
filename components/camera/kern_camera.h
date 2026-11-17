@@ -36,6 +36,15 @@ int kern_camera_log(const char *fmt, ...);
 const char *kern_camera_log_line(int index);
 int kern_camera_log_count(void);
 
+/* On-demand dump for development: if /data/kern/camera_log_dump exists,
+ * write the whole ring to /data/local/tmp/kern-camera.log and consume the
+ * trigger.  Safe to poll from the main loop; no-op when the ring is empty. */
+void kern_camera_log_poll_dump(void);
+
+/* Write the calling process's ring to an explicit path (used by the
+ * camera child before it exits). */
+void kern_camera_log_write(const char *path);
+
 #define KERN_CAMERA_LOG_ENTRIES 128
 #define KERN_CAMERA_LOG_LINE    160
 

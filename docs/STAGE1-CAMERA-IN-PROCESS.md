@@ -109,3 +109,24 @@ KERN_NEXUS_BUILD=/tmp/opencode/stage1-build \
   CAMD_BIN=/tmp/kern-nexus/artifacts/build/camd \
   KERN_SEAL=0 bash scripts/build-image.sh standard
 ```
+
+## Dumping the in-process camera log
+
+The camera log is not on stdout (the recovery service redirects it to
+`/dev/null`). Two development paths exist with `KERN_CAMERA_IN_PROCESS=ON`:
+
+```sh
+# On-demand dump of all lifecycle lines (parent + exec'd children):
+adb shell 'touch /data/kern/camera_log_dump; sleep 3; cat /data/local/tmp/kern-camera.log'
+
+# Continuous append log (both parent and children write here):
+adb shell 'cat /data/local/tmp/kern-camera-runtime.log'
+```
+
+The exec'd camera child writes its private ring to
+`/data/local/tmp/kern-camera-child.log` immediately before quiescing, so
+the last child's lifecycle is available even after it exits.
+
+Note: `-Dprintf=kern_camera_log` must **not** be used for `camd.c` — GCC
+then treats `kern_camera_log` as the `printf` builtin and optimizes the
+calls away. Lifecycle logging uses explicit `kern_camera_log()` calls.

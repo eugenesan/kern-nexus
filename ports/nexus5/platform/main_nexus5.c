@@ -54,6 +54,9 @@ int main(int argc, char **argv) {
   app_main();
 
   for (;;) {
+#ifdef KERN_CAMERA_IN_PROCESS
+    kern_camera_log_poll_dump();
+#endif
     if (!lvgl_port_lock(0))
       continue;
     uint32_t wait = lv_timer_handler();

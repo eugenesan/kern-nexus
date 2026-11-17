@@ -4246,6 +4246,8 @@ static void *socket_thread(void *arg)
 		if (cfd < 0) continue;
 #ifdef KERN_CAMERA_IN_PROCESS
 		cam_clients++;
+		kern_camera_log("[camera] client connect (count=%d)\n",
+				cam_clients);
 		cklog("[SOCK] client connect fd=%d count=%d\n", cfd, cam_clients);
 #endif
 		for (;;) {
@@ -4497,6 +4499,7 @@ static void kern_camera_quiesce(void)
 	struct msm_isp_buf_request brel;
 	struct msm_vfe_axi_stream_release_cmd srel;
 
+	kern_camera_log("[camera] quiesce begin h=%u\n", isp_stream_handle);
 	cklog("[QUIESCE] entry h=%u capture_fd=%d\n", isp_stream_handle,
 	      kern_capture_fd);
 	memset(&ccmd, 0, sizeof(ccmd));
@@ -4523,7 +4526,10 @@ static void kern_camera_quiesce(void)
 	      ioctl(isp_fd, VIDIOC_MSM_ISP_RELEASE_STREAM, &srel));
 
 	cklog("[QUIESCE] complete, exiting\n");
-	kern_camera_log("camera child: quiesced, exiting\n");
+	kern_camera_log("[camera] quiesce complete, child exiting\n");
+	/* The child's ring is private to this process; persist it before
+	 * _exit so the lifecycle trace survives the respawn. */
+	kern_camera_log_write("/data/local/tmp/kern-camera-child.log");
 	_exit(0);
 }
 #endif
@@ -4681,6 +4687,9 @@ int main(int argc, char **argv)
 	int wh[2] = { 640, 480 };
 #ifndef KERN_CAMERA_IN_PROCESS
 	signal(SIGPIPE, SIG_IGN);
+#endif
+#ifdef KERN_CAMERA_IN_PROCESS
+	kern_camera_log("[camera] camd_main entered\n");
 #endif
 
 	setvbuf(stdout, NULL, _IONBF, 0);
