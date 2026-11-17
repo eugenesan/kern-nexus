@@ -1,8 +1,14 @@
 # Safe points and rollback (2026-11-17)
 
 This records the known-good state **before** the in-process camd
-integration.  Nothing in this document is flashed; all device images are
-`fastboot boot`ed from `/tmp`.
+integration and the current Stage 1 state.  Nothing in this document is
+flashed; all device images are `fastboot boot`ed from `/tmp`.
+
+Current `master` is Stage 1 (`70d5b03`); see
+[STAGE1-CAMERA-IN-PROCESS.md](STAGE1-CAMERA-IN-PROCESS.md) for commit IDs,
+build flags and verification evidence.  The pre-integration snapshot
+(`stable-pre-camd-integration` / `pre-camd-integration-2026-11-17`,
+`1292199`) is still the fallback if Stage 1 has to be abandoned.
 
 ## 1. Kernel — in-tree branch (no build-time patches)
 
