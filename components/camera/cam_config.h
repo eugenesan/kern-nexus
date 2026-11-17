@@ -12,12 +12,15 @@
 #ifndef CAM_CONFIG_H
 #define CAM_CONFIG_H
 
+#ifndef KERN_CAM_UPLOAD_DEFINED
+#define KERN_CAM_UPLOAD_DEFINED
 struct cam_upload {
 	unsigned short num_cfg;
 	unsigned short cmd_len;
 	unsigned char *blocks;	/* num_cfg * 16 bytes */
 	unsigned char *data;	/* cmd_len bytes */
 };
+#endif
 
 static unsigned char cam_blk_0[16] = {
 	0xe4, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 

@@ -117,8 +117,18 @@ set(SECURE_SOURCES
 
 file(GLOB PORT_SOURCES "${PORT_DIR}/platform/*.c")
 file(GLOB CAMERA_SOURCES "${PORT_DIR}/../../components/camera/*.c")
-# camd.c is the reference daemon; it is compiled only after the refactor.
+# camd.c stays a standalone daemon unless the in-process seam is enabled.
 list(FILTER CAMERA_SOURCES EXCLUDE REGEX "/camd\\.c$")
+if(KERN_CAMERA_IN_PROCESS)
+  # Stage 1: link the daemon into kern but keep its sockets and AE/AF
+  # controller unchanged.  main -> camd_main, and its printf() output goes
+  # to the bounded log ring instead of stdout (which is /dev/null when
+  # started from the recovery service).
+  list(APPEND CAMERA_SOURCES "${PORT_DIR}/../../components/camera/camd.c")
+  set_source_files_properties(
+    "${PORT_DIR}/../../components/camera/camd.c"
+    PROPERTIES COMPILE_DEFINITIONS "main=camd_main;printf=kern_camera_log")
+endif()
 file(GLOB NFC_SOURCES "${PORT_DIR}/../../components/nfc/*.c")
 file(GLOB SEEDKEEPER_SOURCES "${PORT_DIR}/../../components/seedkeeper/*.c")
 
@@ -173,6 +183,7 @@ target_include_directories(kern-nexus PRIVATE
     "${KERN_DIR}/components/libwally-core/upstream"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../components/seedkeeper"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../components/nfc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../components/camera"
     "${KERN_DIR}/components/libwally-core/upstream/include"
     "${KERN_DIR}/components/libwally-core/upstream/src"
     "${KERN_DIR}/components/libwally-core/upstream/src/ccan"

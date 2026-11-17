@@ -8,12 +8,15 @@
 #ifndef CAM_CYCLE_PREVIEW_H
 #define CAM_CYCLE_PREVIEW_H
 
+#ifndef KERN_CAM_UPLOAD_DEFINED
+#define KERN_CAM_UPLOAD_DEFINED
 struct cam_upload {
 	unsigned short num_cfg;
 	unsigned short cmd_len;
 	unsigned char *blocks;	/* num_cfg * 16 bytes */
 	unsigned char *data;	/* cmd_len bytes */
 };
+#endif
 
 static unsigned char cyc_blk_0[48] = {
 	0x40, 0x04, 0x00, 0x00, 0xf0, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 

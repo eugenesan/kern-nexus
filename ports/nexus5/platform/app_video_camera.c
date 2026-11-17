@@ -25,6 +25,9 @@
 
 #include "esp_err.h"
 #include "video.h"
+#ifdef KERN_CAMERA_IN_PROCESS
+#include "kern_camera.h"
+#endif
 
 #define CAMD_SOCK "/data/kern/camd.sock"
 #define CAMD_LOCAL "/data/kern/camd"
@@ -591,6 +594,14 @@ esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
     return ESP_OK;
   }
 
+#ifdef KERN_CAMERA_IN_PROCESS
+  /* Stage 1: run camd on a dedicated thread inside kern.  The sockets,
+   * frame format and AE/AF controller are unchanged; only the process
+   * boundary moved.  No camera ioctl runs on this (UI) thread. */
+  if (kern_camera_launch() != 0)
+    return ESP_FAIL;
+  klog("kern-nexus camera: launched in-process camd\n");
+#else
   const char *bin = access(CAMD_LOCAL, X_OK) == 0 ? CAMD_LOCAL : CAMD_BUNDLED;
   if (access(bin, X_OK) != 0)
     return ESP_ERR_NOT_FOUND;
@@ -607,6 +618,7 @@ esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
   if (pid < 0)
     return ESP_FAIL;
   klog("kern-nexus camera: spawned %s pid=%d\n", bin, pid);
+#endif
   for (int i = 0; i < 100; i++) {
     if (access(CAMD_SOCK, F_OK) == 0) {
       s_started = 1;

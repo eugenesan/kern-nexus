@@ -17,9 +17,17 @@
 extern "C" {
 #endif
 
+/* Stage 1: run camd's entry point on a dedicated camera thread.  Returns 0
+ * when the thread was created; the sockets appear asynchronously, exactly
+ * as with the external daemon.  Only available in in-process builds. */
+#ifdef KERN_CAMERA_IN_PROCESS
+int kern_camera_launch(void);
+int camd_main(int argc, char **argv);
+#endif
+
 /* Append one line to the bounded camera log ring.  Safe to call from the
  * camera thread; truncates to KERN_CAMERA_LOG_LINE-1 characters. */
-void kern_camera_log(const char *fmt, ...);
+int kern_camera_log(const char *fmt, ...);
 
 /* Diagnostics for development builds.  Returns a pointer into the ring,
  * valid until the next log call, or NULL when the index is out of range. */

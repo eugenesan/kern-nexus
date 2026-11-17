@@ -56,6 +56,11 @@
 #endif
 #include <unistd.h>
 
+#ifdef KERN_CAMERA_IN_PROCESS
+/* In-process build: printf is redirected to the bounded log ring and
+ * main() is renamed to camd_main by the build system. */
+#include "kern_camera.h"
+#endif
 #include "v4l2_caf.h"
 #include "imx179_regs.h"
 #include "isp.h"
@@ -4574,7 +4579,9 @@ int main(int argc, char **argv)
 {
 	pthread_t server, client;
 	int wh[2] = { 640, 480 };
+#ifndef KERN_CAMERA_IN_PROCESS
 	signal(SIGPIPE, SIG_IGN);
+#endif
 
 	setvbuf(stdout, NULL, _IONBF, 0);
 	cpp_msg_load();
