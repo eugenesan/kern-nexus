@@ -1591,6 +1591,7 @@ static volatile int cpp_input_index = 0;
 static volatile unsigned frame_requests;
 #ifdef KERN_CAMERA_IN_PROCESS
 static int kern_capture_fd = -1;   /* capture node fd, for quiesce */
+static volatile int cam_clients;   /* live frame-socket clients */
 static int idle_stop_after;        /* seconds; 0 disables (shipped default) */
 static void kern_camera_quiesce(void);
 #endif
@@ -2909,7 +2910,8 @@ static void *client_thread(void *arg)
 		 * exits; the kern parent respawns it on the next camera page.
 		 * Default-off: idle_stop_after == 0 leaves the shipped
 		 * continuous-stream behaviour untouched. */
-		if (idle_stop_after > 0 && idle > 3 &&
+		if (idle_stop_after > 0 && idle > 3 && frame_requests > 0 &&
+		    cam_clients == 0 &&
 		    time(NULL) - last_request_at >= idle_stop_after)
 			kern_camera_quiesce();
 #endif
@@ -4222,6 +4224,9 @@ static void *socket_thread(void *arg)
 	for (;;) {
 		cfd = accept(sfd, NULL, NULL);
 		if (cfd < 0) continue;
+#ifdef KERN_CAMERA_IN_PROCESS
+		cam_clients++;
+#endif
 		for (;;) {
 			int r = read(cfd, buf, 1);
 			if (r <= 0) break;
@@ -4441,6 +4446,10 @@ static void *socket_thread(void *arg)
 					_exit(0);
 			}
 		}
+#ifdef KERN_CAMERA_IN_PROCESS
+		if (cam_clients > 0)
+			cam_clients--;
+#endif
 		close(cfd);
 	}
 	return NULL;
