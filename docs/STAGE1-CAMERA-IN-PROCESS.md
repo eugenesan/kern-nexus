@@ -10,7 +10,8 @@ build flag.
 |---|---|
 | outer repo branch | `master` |
 | Stage 1 commit | `70d5b03` ("camera: Stage 1 - link camd into kern behind KERN_CAMERA_IN_PROCESS") |
-| idle quiesce merge | `aaa93c5` (merged `camera-inproc-quiesce`: `91dec87`, `97ecf4c`, `e5d4459`, `661f778`) |
+| idle quiesce commits | `230a0e8`, `40d021c`, `56bcd85`, `133397e` (linear history, no merge commit) |
+| post-audit hardening | `5e3e4f6` |
 | prerequisites | `a3bee97` (camd idle CPU), `b2e2795` (CPP timeout patch), `3fcbd64` (Stage 0 seam), `1292199` (kernel branch pin), `d9d224c` (safe-point docs) |
 | kernel submodule branch | `airgap/cam-xz-wipe-kern` |
 | kernel submodule commit | `3e3f2ace562` |
@@ -77,7 +78,8 @@ Host suites (`scripts/test.sh`) pass with the flag both OFF and ON.
 * Stage 2 (direct control calls instead of sockets) has not been done;
   the control socket remains in-process, which is safe because its
   ioctls run on camd's control thread, not the UI thread.
-* Idle power quiesce is now merged (`aaa93c5`). With
+* Idle power quiesce is on master (`230a0e8`..`133397e`, hardened in
+  `5e3e4f6`). With
   `KERN_CAMERA_IN_PROCESS=ON`, the camera runs as a `fork()`+`execv()` child
   of the same binary; a full teardown exits it and `app_video_start()`
   respawns it on the next camera page. It is gated by the persistent
