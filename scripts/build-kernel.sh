@@ -40,6 +40,20 @@ if [ ! -f "$TREE/Makefile" ]; then
     git -C "$TREE" apply "$ROOT/tools/kernel/patches/kern-nexus-kernel.patch"
 fi
 
+# Additional small fixes that live as standalone patches.  Apply only if
+# they are not already present, so repeated builds stay idempotent.
+for patch in "$ROOT"/tools/kernel/patches/*.patch; do
+    case "$(basename "$patch")" in
+        kern-nexus-kernel.patch) continue ;;
+    esac
+    if git -C "$TREE" apply --check "$patch" >/dev/null 2>&1; then
+        git -C "$TREE" apply "$patch"
+        echo "kernel: applied $(basename "$patch")"
+    else
+        echo "kernel: $(basename "$patch") already present or not applicable"
+    fi
+done
+
 # The modified defconfig is kept outside the tree (KernelSU removed).
 # Install it only for the build, then remove it so the kernel submodule
 # stays clean.

@@ -1,0 +1,41 @@
+From: kern-nexus experiment <none@local>
+Subject: [PATCH] msm_cpp: guard frame timeout work against a missing frame
+
+When a camera stream is stopped while a CPP frame timer is still armed,
+msm_cpp_do_timeout_work() runs with cpp_timers[idx].data.processed_frame
+== NULL and dereferences it, panicking the kernel:
+
+  Unable to handle kernel NULL pointer dereference at virtual address 0
+  PC is at msm_cpp_do_timeout_work+0x54/0x15c
+  Internal error: Oops: 17 [#1] PREEMPT SMP ARM
+  Kernel panic - not syncing: Fatal exception
+
+Drop the stale timer slot and return instead of dereferencing the NULL
+frame.  Verified in an instrumented kernel: with the guard, a clean camd
+teardown + fresh process start worked twice and served fresh frames.
+
+Signed-off-by: kern-nexus experiment
+---
+diff --git a/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c b/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
+index df7d4326214..99af8fdfd34 100644
+--- a/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
++++ b/drivers/media/platform/msm/camera_v2/pproc/cpp/msm_cpp.c
+@@ -1173,6 +1173,16 @@ void msm_cpp_do_timeout_work(struct work_struct *work)
+ 
+ 	pr_err("cpp_timer_callback called idx:%d. (jiffies=%lu)\n",
+ 		del_timer_idx, jiffies);
++	/* A stream pause can leave a CPP timer armed after its frame was
++	 * consumed.  Without this guard the NULL processed_frame below
++	 * panics the kernel. */
++	if (!this_frame) {
++		pr_err("[REI] cpp timeout with no frame idx=%d\n", del_timer_idx);
++		cpp_timers[del_timer_idx].used = 0;
++		cpp_timers[del_timer_idx].data.processed_frame = NULL;
++		del_timer_idx = 1 - del_timer_idx;
++		return;
++	}
+ 	pr_err("fatal: cpp_timer expired for identity=0x%x, frame_id=%03d",
+ 		this_frame->identity, this_frame->frame_id);
+ 	cpp_timers[del_timer_idx].used = 0;
+-- 
+2.43.0
