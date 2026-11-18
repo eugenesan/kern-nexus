@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <time.h>
@@ -42,16 +43,19 @@ static int s_sock = -1;
 static app_video_frame_operation_cb_t s_cb;
 static uint32_t s_w = 960, s_h = 1280;
 static int s_started;
-/* Frame pacing for the kern-side camera client.  100 ms is the shipped
- * default; /data/kern/app_frame_delay_ms can lower it (e.g. 33 for ~30 fps)
- * for short scanning sessions. */
-static int app_frame_delay_ms = 100;
+/* Frame pacing for the kern-side camera client.  50 ms (~20 fps ceiling)
+ * is the default after precomputing the preview crop maps; the old 100 ms
+ * is available by writing /data/kern/app_frame_delay_ms.  33 ms was tried
+ * and destabilized the pipeline, so do not use it. */
+static int app_frame_delay_ms = 50;
+static int ae_warmup_frames = 3;
+static int ae_settle_ms = 800;
 
-static int read_delay_ms(void) {
-  int v = 100;
-  FILE *f = fopen("/data/kern/app_frame_delay_ms", "r");
+static int read_int_file(const char *path, int def, int lo, int hi) {
+  int v = def;
+  FILE *f = fopen(path, "r");
   if (f) {
-    if (fscanf(f, "%d", &v) != 1 || v < 1 || v > 500) v = 100;
+    if (fscanf(f, "%d", &v) != 1 || v < lo || v > hi) v = def;
     fclose(f);
   }
   return v;
@@ -297,6 +301,8 @@ static int ae_level(const uint8_t *y, size_t len, int *clipped_pct) {
   return p95;
 }
 
+static void klog(const char *fmt, ...);
+
 static void ae_apply(void) {
   ae_changed_at = ae_now_ms();
   if (ae_luma != ae_luma_applied) {
@@ -317,9 +323,11 @@ static void ae_step(const uint8_t *y, size_t len, int sweeping) {
   ae_frames++;
   if (ae_warmup) {
     ae_warmup--;
+    if (!ae_warmup)
+      klog("kern-nexus camera: AE warmup done at %ums\n", ae_now_ms());
     return;
   }
-  if (ae_changed_at && ae_now_ms() - ae_changed_at < 800)
+  if (ae_changed_at && ae_now_ms() - ae_changed_at < ae_settle_ms)
     return;
   if (ae_manual) {
     if (--ae_manual_hold > 0)
@@ -483,7 +491,7 @@ static void ae_start(void) {
   ae_settle_count = 0;
   ae_locked = 0;
   ae_changed_at = 0;
-  ae_warmup = 3;
+  ae_warmup = ae_warmup_frames;
   /* The exposure can only reach the length of a frame, so the frame is
    * raised to the vendor's 2518 lines before the exposure goes there. */
   (void)camd_ctl_set_vts(AE_VTS);
@@ -526,11 +534,77 @@ static int connect_camd(void) {
   return fd;
 }
 
+/* camd publishes the luma into /tmp/kern/frame with a seqlock.  Reading
+ * that region avoids the 1.76 MiB socket payload per frame (and two heap
+ * allocations) that limited the old client to ~4 fps. */
+#define SHM_PATH "/tmp/kern/frame"
+#define SHM_MAGIC 0x4b435246u   /* "KCRF" */
+struct shm_frame_hdr {
+  volatile uint32_t seq;        /* odd = writing, even = stable */
+  uint32_t magic;
+  uint32_t w, h;
+  uint32_t y_size;
+  uint32_t frame_seq;
+  uint32_t sweeping;
+  uint32_t src_w, src_h;
+  uint64_t pub_ns;
+};
+static uint8_t *s_shm_base;
+static size_t s_shm_size;
+static uint32_t s_first_seq;
+static uint8_t *s_frame_buf;
+static size_t s_frame_buf_size;
+
+static uint64_t mono_ns(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static int shm_attach(void) {
+  int fd = open(SHM_PATH, O_RDONLY);
+  struct shm_frame_hdr *h;
+  if (fd < 0) return -1;
+  s_shm_size = sizeof(struct shm_frame_hdr) + 960u * 1280u;
+  s_shm_base = mmap(NULL, s_shm_size, PROT_READ, MAP_SHARED, fd, 0);
+  close(fd);
+  if (s_shm_base == MAP_FAILED) { s_shm_base = NULL; return -1; }
+  h = (struct shm_frame_hdr *)s_shm_base;
+  if (h->magic != SHM_MAGIC || h->w == 0 || h->h == 0 ||
+      h->y_size == 0 || h->y_size > 960u * 1280u) {
+    munmap(s_shm_base, s_shm_size);
+    s_shm_base = NULL;
+    return -1;
+  }
+  s_first_seq = h->frame_seq;   /* never show a frame from before page open */
+  return 0;
+}
+
 static void *camera_thread(void *arg) {
   (void)arg;
   klog("kern-nexus camera: thread start\n");
+  if (shm_attach() != 0)
+    klog("kern-nexus camera: shm attach failed\n");
+
   while (!s_stop) {
-    uint8_t hdr[32];
+    struct shm_frame_hdr *h = (struct shm_frame_hdr *)s_shm_base;
+    uint64_t t0 = mono_ns(), t1, t2, t3, t4;
+    static uint64_t a_ka, a_cp, a_ae, a_cb, a_all;
+    static int prof_n;
+    uint32_t seq;
+    uint32_t w, hgt, ysz, fseq, sweeping;
+    uint64_t pub;
+
+    if (s_sock >= 0) {
+      /* One-byte keepalive keeps camd's queue rotating and the idle
+       * timer from firing while a camera page is open. */
+      char reply[2];
+      if (write(s_sock, "A", 1) != 1 ||
+          read_exact(s_sock, reply, sizeof(reply)) != 0) {
+        close(s_sock);
+        s_sock = -1;
+      }
+    }
     if (s_sock < 0) {
       s_sock = connect_camd();
       if (s_sock < 0) {
@@ -538,55 +612,75 @@ static void *camera_thread(void *arg) {
         continue;
       }
     }
-    if (write(s_sock, "F", 1) != 1) {
-      close(s_sock);
-      s_sock = -1;
+    t1 = mono_ns();
+    if (!h) {
+      if (shm_attach() != 0) {
+        usleep(200000);
+        continue;
+      }
+      h = (struct shm_frame_hdr *)s_shm_base;
+    }
+
+    /* Seqlock read: retry if the writer was mid-frame. */
+    do {
+      seq = h->seq;
+      __sync_synchronize();
+      if (seq & 1) continue;
+      w = h->w;
+      hgt = h->h;
+      ysz = h->y_size;
+      fseq = h->frame_seq;
+      sweeping = h->sweeping;
+      pub = h->pub_ns;
+      __sync_synchronize();
+    } while (seq & 1 || seq != h->seq);
+
+    if (!pub || mono_ns() - pub > 300000000ULL || fseq <= s_first_seq ||
+        w == 0 || hgt == 0 || ysz != w * hgt || ysz > 960u * 1280u) {
+      usleep((useconds_t)app_frame_delay_ms * 1000);
       continue;
     }
-    if (read_exact(s_sock, hdr, sizeof(hdr)) != 0) {
-      close(s_sock);
-      s_sock = -1;
+
+    if (ysz > s_frame_buf_size) {
+      free(s_frame_buf);
+      s_frame_buf = malloc(ysz);
+      s_frame_buf_size = s_frame_buf ? ysz : 0;
+    }
+    if (!s_frame_buf) {
+      usleep((useconds_t)app_frame_delay_ms * 1000);
       continue;
     }
-    if (memcmp(hdr, "KCF1", 4) != 0)
-      continue; /* no frame ready */
-    uint32_t w = (uint32_t)hdr[8] | (uint32_t)hdr[9] << 8;
-    uint32_t h = (uint32_t)hdr[10] | (uint32_t)hdr[11] << 8;
-    int af_sweeping = hdr[18];
-    uint32_t ysz = (uint32_t)hdr[24] | (uint32_t)hdr[25] << 8 |
-                   (uint32_t)hdr[26] << 16 | (uint32_t)hdr[27] << 24;
-    uint32_t uvsz = (uint32_t)hdr[28] | (uint32_t)hdr[29] << 8 |
-                    (uint32_t)hdr[30] << 16 | (uint32_t)hdr[31] << 24;
-    if (w == 0 || h == 0 || w > 4096 || h > 4096 ||
-        ysz != (uint64_t)w * h || uvsz > w * h) {
-      continue;
-    }
-    uint8_t *frame = malloc((size_t)ysz + uvsz);
-    if (!frame)
-      continue;
-    if (read_exact(s_sock, frame, (size_t)ysz + uvsz) != 0) {
-      free(frame);
-      close(s_sock);
-      s_sock = -1;
-      continue;
-    }
-    ae_step(frame, (size_t)ysz, af_sweeping);
+    t2 = mono_ns();
+    memcpy(s_frame_buf, s_shm_base + sizeof(struct shm_frame_hdr), ysz);
+    t3 = mono_ns();
+
+    ae_step(s_frame_buf, ysz, sweeping ? 1 : 0);
+    t4 = mono_ns();
     if (s_cb && !s_stop) {
       static int frames;
       if (!frames)
-        klog("kern-nexus camera: first frame %ux%u Y8 (y=%u uv=%u)\n", w, h,
-             ysz, uvsz);
+        klog("kern-nexus camera: first frame %ux%u Y8 (y=%u) at %ums\n",
+             w, hgt, ysz, ae_now_ms());
       frames++;
+      if (frames % 10 == 0)
+        klog("kern-nexus camera: %d frames at %ums\n", frames, ae_now_ms());
       s_w = w;
-      s_h = h;
-      /* Y8 only: camd's chroma is not a standard UV plane, and the scanner
-       * and preview are grayscale.  The callback copies what it needs before
-       * we free the frame. */
-      s_cb(frame, 0, w, h, ysz);
+      s_h = hgt;
+      /* Callback borrows the buffer and consumes it in-call. */
+      s_cb(s_frame_buf, 0, w, hgt, ysz);
     }
-    free(frame);
-    /* Pacing is configurable: 10 fps by default, but a short scan can
-     * afford 30 fps (33 ms) now that camd runs in the same binary. */
+    a_ka += t1 - t0;
+    a_cp += t3 - t2;
+    a_ae += t4 - t3;
+    a_cb += mono_ns() - t4;
+    a_all += mono_ns() - t0;
+    if (++prof_n >= 10) {
+      klog("kern-nexus prof ka=%.1f cp=%.1f ae=%.1f cb=%.1f all=%.1f ms\n",
+           a_ka / prof_n / 1e6, a_cp / prof_n / 1e6,
+           a_ae / prof_n / 1e6, a_cb / prof_n / 1e6,
+           a_all / prof_n / 1e6);
+      prof_n = 0; a_ka = a_cp = a_ae = a_cb = a_all = 0;
+    }
     usleep((useconds_t)app_frame_delay_ms * 1000);
   }
   klog("kern-nexus camera: thread stop\n");
@@ -595,7 +689,9 @@ static void *camera_thread(void *arg) {
 
 esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
   (void)ignored;
-  app_frame_delay_ms = read_delay_ms();
+  app_frame_delay_ms = read_int_file("/data/kern/app_frame_delay_ms",50,1,500);
+  ae_warmup_frames = read_int_file("/data/kern/ae_warmup",3,0,8);
+  ae_settle_ms = read_int_file("/data/kern/ae_settle_ms",800,0,3000);
   if (s_started)
     return ESP_OK;
 

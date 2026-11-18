@@ -81,6 +81,8 @@ static void cklog(const char *fmt, ...)
 #endif
 }
 #endif
+static uint64_t now_ns(void);
+
 #include "v4l2_caf.h"
 #include "imx179_regs.h"
 #include "isp.h"
@@ -1210,6 +1212,7 @@ struct shm_frame_hdr {
 	uint32_t frame_seq;	/* the publish counter */
 	uint32_t sweeping;	/* the AF sweep is running */
 	uint32_t src_w, src_h;	/* the sensor window the preview came from */
+	uint64_t pub_ns;	/* CLOCK_MONOTONIC when this frame was published */
 };
 static int shm_fd = -1;
 static unsigned char *shm_base;
@@ -1268,6 +1271,7 @@ static void shm_publish(void)
 	memcpy(dst, latest_y, (size_t)out_w * out_h);
 	h->frame_seq = (uint32_t)latest_seq;
 	h->sweeping = af_sweeping ? 1 : 0;
+	h->pub_ns = now_ns();
 	__sync_synchronize();
 	h->seq++;		/* even: the frame is stable */
 }
@@ -4186,8 +4190,22 @@ proc_done:
 				       down / 1e6, q / 1e6, pace / 1e6,
 				       (p7 - p0 + pace) / 1e6,
 				       1e9 / (double)(p7 - p0 + pace));
-			if (profile_mode >= 1 && pn >= 10) {
+			if (pn >= 10) {
 				double d = (double)pn;
+#ifdef KERN_CAMERA_IN_PROCESS
+				kern_camera_log("[prof] n=%d upd=%.1f cpp=%.1f "
+						"rep=%.1f wait=%.1f dq=%.1f "
+						"down=%.1f tot=%.1f fps=%.1f\n",
+						pn, a_upd / d / 1e6,
+						a_cpp / d / 1e6,
+						a_rep / d / 1e6,
+						a_wait / d / 1e6,
+						a_dq / d / 1e6,
+						a_down / d / 1e6,
+						a_tot / d / 1e6,
+						1e9 / (a_tot / d));
+#endif
+				if (profile_mode >= 1)
 				printf("[prof-sum] wall=%ld frames=%d avg_ms "
 				       "upd=%.2f cpp=%.2f rep=%.2f wait=%.2f "
 				       "dq=%.2f dbg=%.2f down=%.2f q=%.2f "
