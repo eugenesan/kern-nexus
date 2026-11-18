@@ -14,10 +14,10 @@ build flags and verification evidence.  The pre-integration snapshot
 
 | item | value |
 |---|---|
-| `linux/` submodule branch | `airgap/cam-xz-wipe-kern` |
-| submodule commit | `3e3f2ace562` ("msm_cpp: guard frame timeout work against a missing frame") |
+| `linux/` submodule branch | `airgap/cam-xz-wipe` (shared with krux-nexus) |
+| submodule commit | `d10a28ee249` ("camera: make quiesce teardown paths idempotent"), preceded by `1d2a76cd835` (CPP timeout NULL guard) |
 | parent | `airgap/cam-xz-wipe` (`cc17c59739b`, the camera/wipe branch) |
-| outer commit pinning it | `1292199` |
+| outer commit pinning it | `b59c19d` (the old `airgap/cam-xz-wipe-kern` branch is retired) |
 
 The branch already contains the full `tools/kernel/patches/kern-nexus-kernel.patch`
 series (inherited from `airgap/cam-xz-wipe`) **and** the CPP timeout NULL
@@ -30,10 +30,10 @@ To return to this kernel state:
 
 ```sh
 cd /home/user/Develop/src/kern-nexus/linux
-git checkout airgap/cam-xz-wipe-kern
-git reset --hard 3e3f2ace562
+git checkout airgap/cam-xz-wipe
+git reset --hard d10a28ee249
 cd ..
-# the outer tree at 1292199 already pins this exact commit
+# the outer tree at b59c19d already pins this exact commit
 ```
 
 ## 2. Outer tree snapshot before integration
@@ -51,7 +51,7 @@ this snapshot.  To roll back the whole outer tree:
 ```sh
 cd /home/user/Develop/src/kern-nexus
 git checkout stable-pre-camd-integration      # or: git checkout pre-camd-integration-2026-11-17
-git submodule update --init linux            # pins 3e3f2ace562
+git submodule update --init linux            # pins d10a28ee249
 bash scripts/test.sh
 bash scripts/build-all.sh
 ```

@@ -12,9 +12,9 @@ build flag.
 | Stage 1 commit | `70d5b03` ("camera: Stage 1 - link camd into kern behind KERN_CAMERA_IN_PROCESS") |
 | idle quiesce commits | `230a0e8`, `40d021c`, `56bcd85`, `133397e` (linear history, no merge commit) |
 | post-audit hardening | `5e3e4f6` |
-| prerequisites | `a3bee97` (camd idle CPU), `b2e2795` (CPP timeout patch), `3fcbd64` (Stage 0 seam), `1292199` (kernel branch pin), `d9d224c` (safe-point docs) |
-| kernel submodule branch | `airgap/cam-xz-wipe-kern` |
-| kernel submodule commit | `3e3f2ace562` |
+| prerequisites | `a3bee97` (camd idle CPU), `b2e2795` (CPP timeout patch), `3fcbd64` (Stage 0 seam), `b59c19d` (shared kernel branch), `d9d224c` (safe-point docs) |
+| kernel submodule branch | `airgap/cam-xz-wipe` (shared with krux-nexus) |
+| kernel submodule commit | `d10a28ee249` |
 | safe snapshot (pre-integration) | branch `stable-pre-camd-integration`, tag `pre-camd-integration-2026-11-17`, commit `1292199` |
 | rollback | see [SAFE-POINTS.md](SAFE-POINTS.md) |
 
@@ -56,7 +56,7 @@ camd's diagnostics go to the log ring instead of stdout.
 ## What was verified on hardware
 
 Image: audit build with `KERN_CAMERA_IN_PROCESS=ON`, kernel
-`airgap/cam-xz-wipe-kern` (CPP guard in-tree), `fastboot boot` only.
+`airgap/cam-xz-wipe` (CPP guard + idempotent teardown in-tree), `fastboot boot` only.
 Host suites (`scripts/test.sh`) pass with the flag both OFF and ON.
 
 * `ps` shows two `kern-nexus` processes: the signer parent and the
