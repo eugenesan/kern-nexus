@@ -8,6 +8,7 @@ cd "$ROOT"
 source "$ROOT/scripts/env.sh"
 
 bash scripts/build-mbedtls.sh
+bash scripts/build-mbedtls-host.sh   # pinned 3.6.7 for host core/bip138 tests
 bash scripts/build-zlib.sh
 bash scripts/build-kernel.sh
 bash scripts/build-kern.sh
