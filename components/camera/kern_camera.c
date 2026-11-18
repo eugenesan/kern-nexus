@@ -8,6 +8,7 @@
 
 #include <pthread.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -171,6 +172,12 @@ int kern_camera_run_child(void)
  * calls only async-signal-safe functions (execv, write, _exit), which is
  * the POSIX-safe way to spawn from a multithreaded process. */
 static pid_t kern_camera_child_pid;
+
+void kern_camera_cancel_quiesce(void)
+{
+	if (kern_camera_child_pid > 0)
+		kill(kern_camera_child_pid, SIGUSR2);
+}
 
 int kern_camera_launch(void)
 {

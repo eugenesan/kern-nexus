@@ -24,6 +24,8 @@ extern "C" {
 #ifdef KERN_CAMERA_IN_PROCESS
 int kern_camera_launch(void);
 int kern_camera_run_child(void);
+/* Ask the camera child to abort a pending quiesce (SIGUSR2). */
+void kern_camera_cancel_quiesce(void);
 int camd_main(int argc, char **argv);
 #endif
 

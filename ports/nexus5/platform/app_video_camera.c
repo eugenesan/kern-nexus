@@ -42,6 +42,20 @@ static int s_sock = -1;
 static app_video_frame_operation_cb_t s_cb;
 static uint32_t s_w = 960, s_h = 1280;
 static int s_started;
+/* Frame pacing for the kern-side camera client.  100 ms is the shipped
+ * default; /data/kern/app_frame_delay_ms can lower it (e.g. 33 for ~30 fps)
+ * for short scanning sessions. */
+static int app_frame_delay_ms = 100;
+
+static int read_delay_ms(void) {
+  int v = 100;
+  FILE *f = fopen("/data/kern/app_frame_delay_ms", "r");
+  if (f) {
+    if (fscanf(f, "%d", &v) != 1 || v < 1 || v > 500) v = 100;
+    fclose(f);
+  }
+  return v;
+}
 
 /* --- exposure and focus -------------------------------------------------
  *
@@ -571,9 +585,9 @@ static void *camera_thread(void *arg) {
       s_cb(frame, 0, w, h, ysz);
     }
     free(frame);
-    /* camd stays the expensive side; 10 fps keeps the UI responsive and is
-     * ample for QR/entropy. */
-    usleep(100000);
+    /* Pacing is configurable: 10 fps by default, but a short scan can
+     * afford 30 fps (33 ms) now that camd runs in the same binary. */
+    usleep((useconds_t)app_frame_delay_ms * 1000);
   }
   klog("kern-nexus camera: thread stop\n");
   return NULL;
@@ -581,6 +595,7 @@ static void *camera_thread(void *arg) {
 
 esp_err_t app_video_init_once(i2c_master_bus_handle_t ignored) {
   (void)ignored;
+  app_frame_delay_ms = read_delay_ms();
   if (s_started)
     return ESP_OK;
 
@@ -643,10 +658,9 @@ esp_err_t app_video_start(app_video_frame_operation_cb_t cb, int core_id) {
    * sure only one page can decide to spawn. */
   {
     int probe;
-    /* If the child is in its quiesce grace window, removing the marker
-     * cancels the teardown and keeps the existing stream alive. */
-    if (access("/data/kern/camd_quiescing", F_OK) == 0)
-      unlink("/data/kern/camd_quiescing");
+    /* If the child is in its quiesce grace window, a signal cancels the
+     * teardown and keeps the existing stream alive. */
+    kern_camera_cancel_quiesce();
     probe = connect_camd();
     if (probe < 0) {
       unlink(CAMD_SOCK);

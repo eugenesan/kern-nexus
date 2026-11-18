@@ -1613,6 +1613,13 @@ static volatile unsigned frame_requests;
 static int kern_capture_fd = -1;   /* capture node fd, for quiesce */
 static volatile int cam_clients;   /* live frame-socket clients */
 static int idle_stop_after;        /* seconds; 0 disables (shipped default) */
+static volatile int cam_stop_req, cam_start_req;
+static volatile sig_atomic_t cam_quiesce_cancel;
+static void quiesce_cancel_handler(int sig)
+{
+	(void)sig;
+	cam_quiesce_cancel = 1;
+}
 static void kern_camera_quiesce(void);
 #endif
 /* The ISP consumes capture buffers in the order they were queued, so the
@@ -4500,18 +4507,13 @@ static void kern_camera_quiesce(void)
 	struct msm_vfe_axi_stream_release_cmd srel;
 
 	kern_camera_log("[camera] quiesce begin h=%u\n", isp_stream_handle);
-	{
-		int mf = open("/data/kern/camd_quiescing",
-			      O_WRONLY | O_CREAT | O_TRUNC, 0600);
-		if (mf >= 0) close(mf);
-	}
-	/* Grace window: a camera page opened during this time removes the
-	 * marker, which cancels the quiesce entirely.  Avoids a pipeline
-	 * restart (and the out-of-phase frames that follow one). */
+	cam_quiesce_cancel = 0;
+	/* Grace window: a camera page sends SIGUSR2, which cancels the
+	 * quiesce entirely and avoids an out-of-phase pipeline restart. */
 	{
 		int i;
 		for (i = 0; i < 150; i++) {
-			if (access("/data/kern/camd_quiescing", F_OK) != 0) {
+			if (cam_quiesce_cancel) {
 				kern_camera_log("[camera] quiesce cancelled\n");
 				quiescing = 0;
 				/* Give the returning client a full idle window
@@ -4716,8 +4718,8 @@ int main(int argc, char **argv)
 	signal(SIGPIPE, SIG_IGN);
 #endif
 #ifdef KERN_CAMERA_IN_PROCESS
+	signal(SIGUSR2, quiesce_cancel_handler);
 	kern_camera_log("[camera] camd_main entered\n");
-	unlink("/data/kern/camd_quiescing");
 #endif
 
 	setvbuf(stdout, NULL, _IONBF, 0);
